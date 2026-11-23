@@ -5,7 +5,8 @@ param(
   [Parameter(Mandatory)][string]$Xls,
   [string]$Catalog = '',
   [string]$Out = '',
-  [double]$MinFuzzy = 0.78
+  [double]$MinFuzzy = 0.78,
+  [string]$Sheet = 'Sheet2$'      # Sheet2 is the primary register; use 'Sheet$' for the older full export
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -15,13 +16,19 @@ $Catalog = [IO.Path]::GetFullPath($Catalog); $Out = [IO.Path]::GetFullPath($Out)
 
 # ---------- 1. read the register through ACE/OLEDB ----------
 $cn = New-Object Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=$Xls;Extended Properties='Excel 8.0;HDR=NO;IMEX=1'")
-$cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = 'select * from [Sheet$]'; $cmd.CommandTimeout = 600
+$cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = "select * from [$Sheet]"; $cmd.CommandTimeout = 600
 $r = $cmd.ExecuteReader()
-$col = @{ code = 0; name = 1; brand = 4; model = 5; serial = 6; rfid = 7; po = 8; type = 10; dept = 14; status = 16; floor = 19; room = 20; note = 29 }
+# column positions (0-based). Sheet2 (primary) has a leading "printed sticker" column and the extra New!/location columns.
+if ($Sheet -like 'Sheet2*') {
+  $col = @{ code = 1; name = 2; brand = 5; model = 6; serial = 7; rfid = 8; po = 9; type = 11; dept = 14; status = 16; floor = 18; room = 19; note = 26; loc = 32; floor2 = 36; room2 = 38; printed = 0; work = 39; worktype = 40; med = 41 }
+} else {
+  $col = @{ code = 0; name = 1; brand = 4; model = 5; serial = 6; rfid = 7; po = 8; type = 10; dept = 14; status = 16; floor = 19; room = 20; note = 29 }
+}
 $rows = New-Object Collections.ArrayList; $first = $true
 while ($r.Read()) {
   if ($first) { $first = $false; continue }
   $o = @{}; foreach ($k in $col.Keys) { $v = $r.GetValue($col[$k]); $o[$k] = if ($v -is [DBNull]) { '' } else { ("$v").Trim() } }
+  if ($o.floor2) { $o.floor = $o.floor2 }; if ($o.room2) { $o.room = $o.room2 }     # prefer the corrected "ชั้น"/"ห้อง" columns when filled
   if ($o.code) { [void]$rows.Add($o) }
 }
 $r.Close(); $cn.Close()
@@ -129,12 +136,14 @@ for ($k = 0; $k -lt $rows.Count; $k++) {
   $a = $rows[$k]; $ix = $aItem[$k]
   [void]$list.Add([ordered]@{
       c = $a.code; n = $a.name; b = $a.brand; m = $a.model; s = $a.serial; rf = $a.rfid; po = $a.po; t = $a.type; d = $a.dept
-      st = $a.status; f = $a.floor; rm = $a.room; nt = $a.note
+      st = $a.status; f = $a.floor; rm = $a.room; nt = $a.note; loc = $a.loc; pr = $a.printed; wk = $a.work; wt = $a.worktype; md = $a.med
       i = $(if ($ix -ge 0) { $items[$ix].id } else { $null }); cf = [math]::Round($aConf[$k], 2); how = $aHow[$k]
     })
 }
 # the app only needs matched assets, with a few fields (full detail is in asset-match.csv)
-$slim = $list | ? { $_.i } | % { [ordered]@{ c = $_.c; i = $_.i; s = $_.s; f = $_.f; st = $_.st; cf = $_.cf; how = $_.how; n = $_.n } }
+$slim = $list | % { $o = [ordered]@{ c = $_.c; n = $_.n; i = $_.i; s = $_.s; f = $_.f; st = $_.st; cf = $_.cf; how = $_.how }
+  foreach ($p in @(@('rm', 'rm'), @('d', 'd'), @('b', 'b'), @('m', 'm'), @('loc', 'loc'), @('pr', 'pr'), @('wt', 'wt'), @('md', 'md'))) { $v = $_[$p[1]]; if ($v) { $o[$p[0]] = $v } }
+  $o }
 $json = [ordered]@{ generated = (Get-Date -Format s); source = [IO.Path]::GetFileName($Xls); total = $list.Count; assets = @($slim) } | ConvertTo-Json -Depth 5 -Compress
 [IO.File]::WriteAllText($Out, $json, (New-Object Text.UTF8Encoding($false)))
 

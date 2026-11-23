@@ -245,9 +245,9 @@ function openRematch(it) {
     <input type="search" id="dlgQ" placeholder="ค้นหาเลขครุภัณฑ์ / ชื่อ / Serial ในทะเบียน"><div class="res" id="dlgRes"></div><div style="text-align:right"><button class="ghost" id="dlgClose">ปิด</button></div></div>`;
   const draw = () => {
     const q = $('dlgQ').value.trim().toLowerCase(), all = Object.values(assetByCode);
-    const hit = (q ? all.filter(a => `${a.c} ${a.n} ${a.s}`.toLowerCase().includes(q)) : (assetsByItem[it.id] || []).concat(all.filter(a => !a.i).slice(0, 20))).slice(0, 60);
+    const hit = (q ? all.filter(a => `${a.c} ${a.n} ${a.s} ${a.rm || ''} ${a.d || ''} ${a.loc || ''}`.toLowerCase().includes(q)) : (assetsByItem[it.id] || []).concat(all.filter(a => !a.i).slice(0, 20))).slice(0, 60);
     $('dlgRes').innerHTML = hit.map(a => `<div class="asset"><div><b>${esc(a.c)}</b> ${a.i === it.id ? '<span class="badge ok">ปัจจุบัน</span>' : a.i ? `<span class="badge">ใช้กับ: ${esc((itemById[a.i] || {}).name || a.i).slice(0, 40)}</span>` : '<span class="badge cam">ว่าง</span>'}</div>
-      <div class="s muted">${esc([a.n, a.f, a.s && 'S/N ' + a.s].filter(Boolean).join(' · '))}</div>
+      <div class="s muted">${esc([a.n, a.f, a.rm || a.d, a.s && 'S/N ' + a.s].filter(Boolean).join(' · '))}</div>
       ${a.i === it.id ? `<button class="ghost" data-rm="${esc(a.c)}">ปลดออกจากรายการนี้</button>` : `<button data-pick="${esc(a.c)}">จับคู่กับรายการนี้</button>`}</div>`).join('') || '<p class="muted">ไม่พบในทะเบียน</p>';
   };
   draw(); $('dlgQ').oninput = draw;
@@ -264,7 +264,7 @@ function renderAssets(it) {
   return `<h3 style="font-size:14px;margin:16px 0 4px">เลขครุภัณฑ์ (${as.length}) <span class="muted" style="font-weight:400;font-size:12px">· ปักแล้ว ${pinned.size}</span> <button class="ghost" id="btnRematch" style="padding:1px 8px;font-size:12px">แก้การจับคู่</button></h3>
     <div class="assets">${as.slice(0, 200).map(a => `<div class="asset ${curAsset === a.c ? 'sel' : ''}" data-asset="${esc(a.c)}">
       <div><b>${esc(a.c)}</b>${a.how !== 'exact' ? ` <span class="badge" title="ความมั่นใจ ${a.cf}">${a.how === 'manual' ? 'จับคู่ด้วยมือ' : a.how.includes('excess') ? 'เกินจำนวนในเอกสาร' : 'ชื่อใกล้เคียง'}</span>` : ''}</div>
-      <div class="s muted">${esc([a.f, a.s && 'S/N ' + a.s, a.st].filter(Boolean).join(' · '))}</div>
+      <div class="s muted">${esc([a.n !== it.name && a.n, a.f, a.rm || a.d, a.loc, a.b, a.m, a.s && 'S/N ' + a.s, a.st].filter(Boolean).join(' · '))}</div>
       <button class="ghost" data-placeasset="${esc(a.c)}">${pinned.has(a.c) ? '✓ ปักแล้ว · ปักใหม่' : '📍 ปักหมุด'}</button></div>`).join('')}
     ${as.length > 200 ? `<p class="muted">แสดง 200 จาก ${as.length}</p>` : ''}</div>`;
 }
@@ -500,7 +500,7 @@ $('btnTheme').onclick = () => { const dark = $('btnTheme').textContent === '☀'
   CAT.items.forEach(i => itemById[i.id] = i); CAT.photos.forEach(p => photoById[p.id] = p); CAT.plans.forEach(p => planById[p.id] = p);
   try {
     const A = await (await fetch('data/assets.json')).json();
-    A.assets.forEach(a => { (assetsByItem[a.i] = assetsByItem[a.i] || []).push(a); assetByCode[a.c] = a; });
+    A.assets.forEach(a => { if (a.i) (assetsByItem[a.i] = assetsByItem[a.i] || []).push(a); assetByCode[a.c] = a; });   // unmatched register rows stay in assetByCode (free to pick in the re-match dialog)
   } catch { /* assets.json is optional */ }
   await loadState();
   Object.entries(state.matchOverrides || {}).forEach(([c, i]) => applyOverride(c, i));
