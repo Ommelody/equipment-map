@@ -13,7 +13,8 @@ let tab = 'plans', editMode = false;
 let curPlan = null, pdfDoc = null, pageNo = 1, zoom = 1, fitZoom = 1, baseW = 0, baseH = 0, renderTok = 0;
 let curItem = null, selPin = null, curAsset = null;   // curAsset = asset code chosen for the next pin
 let assetsByItem = {}, assetByCode = {};
-let shown = 150;                       // list paging
+const docCache = new Map(), bmpCache = new Map(); let renderTask = null;   // opened PDFs / fit-size renders, so reopening a plan is instant
+let shown = 150;                      // list paging
 
 /* ---------------- storage ---------------- */
 let saveTimer = null;
@@ -105,8 +106,10 @@ function renderList() {
   const el = $('list'), cat = $('catSel').value, q = $('q').value.trim().toLowerCase();
   $('floorSel').hidden = tab !== 'items'; $('pinFilterWrap').hidden = tab !== 'items';
   if (tab === 'plans') {
-    const arr = CAT.plans.filter(p => (!cat || p.cat === cat) && (!q || p.title.toLowerCase().includes(q)));
-    el.innerHTML = arr.map(p => {
+    let arr = CAT.plans.filter(p => (!cat || p.cat === cat) && (!q || p.title.toLowerCase().includes(q)));
+    const rel = curItem ? new Set(relatedPlans(curItem).map(p => p.id)) : null;   // plans for the selected item float to the top
+    if (rel) arr = [...arr.filter(p => rel.has(p.id)), ...arr.filter(p => !rel.has(p.id))];
+    el.innerHTML = (rel ? `<div class="grp">แปลนที่เกี่ยวข้องกับ “${esc(curItem.name.slice(0, 40))}” อยู่บนสุด</div>` : `<div class="grp">${arr.length} แปลน${cat ? ' ในหมวด ' + esc(catName(cat)) : ''}</div>`) + arr.map(p => {
       const n = state.pins.filter(x => x.plan === p.id).length;
       return `<div class="row ${curPlan && curPlan.id === p.id ? 'sel' : ''}" data-plan="${p.id}"><div class="t">${esc(p.title)}</div>
         <div class="s"><span class="badge">${esc(catName(p.cat))}</span>${p.floor ? `<span class="badge">${floorLbl(p.floor)}</span>` : ''}<span class="badge">${p.sizeMB} MB</span>${n ? `<span class="badge ok">${n} หมุด</span>` : ''}</div></div>`;
@@ -225,27 +228,41 @@ async function loadPlan(plan, page = 1, focus = null) {
   curPlan = plan; $('planTitle').textContent = plan.title; $('btnPlanItems').hidden = false; if (curItem) renderDetail(); $('msg').textContent = 'กำลังโหลดแปลน… (' + plan.sizeMB + ' MB)'; $('msg').style.display = 'flex'; $('stage').style.display = 'none';
   renderList();
   try {
+    const cached = docCache.get(plan.id);
+    if (cached) { docCache.delete(plan.id); docCache.set(plan.id, cached); pdfDoc = cached; pageNo = page; $('pgTot').textContent = cached.numPages; $('pageCtl').hidden = cached.numPages < 2; await renderPage(true, focus); return; }
     const src = SHEET ? { data: await loadPlanBytes(plan.file, f => { if (curPlan === plan) $('msg').textContent = `กำลังโหลดแปลนจาก Google Drive… ${Math.round(f * 100)}% (${plan.sizeMB} MB)`; }) } : { url: plan.url || aUrl('plans', plan.file), rangeChunkSize: 1 << 20 };
     const task = pdfjsLib.getDocument(src);
-    const doc = await task.promise; if (curPlan !== plan) return;
+    $('msg').textContent = 'กำลังเปิดไฟล์แปลน…';
+    const doc = await task.promise; if (curPlan !== plan) { doc.destroy(); return; }
+    docCache.set(plan.id, doc); while (docCache.size > 4) { const k = docCache.keys().next().value; docCache.get(k).destroy(); docCache.delete(k); bmpCache.forEach((_, bk) => bk.startsWith(k + ':') && bmpCache.delete(bk)); }
     pdfDoc = doc; pageNo = page; $('pgTot').textContent = doc.numPages; $('pageCtl').hidden = doc.numPages < 2;
     await renderPage(true, focus);
   } catch (e) { $('msg').textContent = 'โหลดแปลนไม่สำเร็จ: ' + (e.message || e) + '\n(ถ้ายังไม่ได้อัปโหลดไฟล์ไป R2 ให้ตรวจสอบโฟลเดอร์ assets-upload)'; }
 }
 async function renderPage(fit, focus) {
-  const tok = ++renderTok; const pg = await pdfDoc.getPage(pageNo); if (tok !== renderTok) return;
+  const tok = ++renderTok; if (renderTask) { try { renderTask.cancel(); } catch { } renderTask = null; }
+  const pg = await pdfDoc.getPage(pageNo); if (tok !== renderTok) return;
   const v1 = pg.getViewport({ scale: 1 }); baseW = v1.width; baseH = v1.height;
-  const sc = $('scroller');
+  const sc = $('scroller'), cv = $('cv'), key = curPlan.id + ':' + pageNo + ':' + sc.clientWidth + 'x' + sc.clientHeight;
   if (fit) { fitZoom = Math.min((sc.clientWidth - 40) / baseW, (sc.clientHeight - 40) / baseH); zoom = fitZoom; }
   const vp = pg.getViewport({ scale: zoom });
   const dpr = Math.min(window.devicePixelRatio || 1, 2), cap = 9000;
   const out = Math.min(dpr, cap / vp.width, cap / vp.height);
-  const cv = $('cv'); cv.width = Math.floor(vp.width * out); cv.height = Math.floor(vp.height * out);
   cv.style.width = vp.width + 'px'; cv.style.height = vp.height + 'px';
   $('msg').style.display = 'none'; $('stage').style.display = 'block'; $('pgNum').textContent = pageNo; $('zLbl').textContent = Math.round(zoom / fitZoom * 100) + '%';
   renderPins();
-  const rt = pg.render({ canvasContext: cv.getContext('2d'), viewport: pg.getViewport({ scale: zoom * out }) });
-  try { await rt.promise; } catch { }
+  const hit = fit && bmpCache.get(key);
+  if (hit) { cv.width = hit.width; cv.height = hit.height; cv.getContext('2d').drawImage(hit, 0, 0); if (focus) scrollToPin(focus); return; }
+  // render off-screen so the previous (blurry) image stays visible until the sharp one is ready
+  const tmp = document.createElement('canvas'); tmp.width = Math.floor(vp.width * out); tmp.height = Math.floor(vp.height * out);
+  if (fit) { cv.width = tmp.width; cv.height = tmp.height; }
+  $('msg').textContent = 'กำลังวาดแปลน… (ไฟล์แปลนละเอียด อาจใช้เวลาสักครู่)'; $('msg').style.display = 'flex';
+  renderTask = pg.render({ canvasContext: tmp.getContext('2d'), viewport: pg.getViewport({ scale: zoom * out }) });
+  try { await renderTask.promise; } catch { return; }
+  if (tok !== renderTok) return;
+  renderTask = null; $('msg').style.display = 'none';
+  cv.width = tmp.width; cv.height = tmp.height; cv.getContext('2d').drawImage(tmp, 0, 0);
+  if (fit) { bmpCache.set(key, tmp); while (bmpCache.size > 6) bmpCache.delete(bmpCache.keys().next().value); }
   if (focus) scrollToPin(focus);
 }
 function setZoom(z, anchor) {
@@ -358,7 +375,15 @@ $('pinColor').onchange = renderPins;
 $('btnPlanItems').onclick = () => curPlan && showItemsOfPlan(curPlan);
 $('btnLeft').onclick = () => { $('right').classList.remove('open'); $('left').classList.toggle('open'); };
 $('btnRight').onclick = () => { $('left').classList.remove('open'); $('right').classList.toggle('open'); };
-$('catSel').onchange = () => { refreshFloors(); shown = 150; renderList(); };
+$('catSel').onchange = () => {
+  const cat = $('catSel').value; refreshFloors(); shown = 150;
+  if (cat && curItem && curItem.cat !== cat) { curItem = null; curAsset = null; selPin = null; renderDetail(); renderEditBar(); }
+  if (cat && curPlan && curPlan.cat !== cat) {          // plan viewer follows the category
+    const first = CAT.plans.find(p => p.cat === cat);
+    if (first) loadPlan(first); else { curPlan = null; pdfDoc = null; $('planTitle').textContent = 'หมวดนี้ไม่มีไฟล์แปลน'; $('stage').style.display = 'none'; $('msg').style.display = 'flex'; $('msg').textContent = 'หมวดงานนี้ไม่มีแปลนในเอกสาร'; $('btnPlanItems').hidden = true; $('pageCtl').hidden = true; }
+  }
+  renderPins(); renderList();
+};
 $('floorSel').onchange = () => { shown = 150; renderList(); };
 $('onlyUnpinned').onchange = () => { shown = 150; renderList(); };
 let qT; $('q').oninput = () => { clearTimeout(qT); qT = setTimeout(() => { shown = 150; renderList(); }, 200); };
