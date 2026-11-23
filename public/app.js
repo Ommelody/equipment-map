@@ -104,7 +104,7 @@ function refreshFloors() {
 }
 function renderList() {
   const el = $('list'), cat = $('catSel').value, q = $('q').value.trim().toLowerCase();
-  $('floorSel').hidden = tab !== 'items'; $('pinFilterWrap').hidden = tab !== 'items';
+  $('floorSel').hidden = tab !== 'items' && tab !== 'photos'; $('pinFilterWrap').hidden = tab !== 'items';
   if (tab === 'plans') {
     let arr = CAT.plans.filter(p => (!cat || p.cat === cat) && (!q || p.title.toLowerCase().includes(q)));
     const rel = curItem ? new Set(relatedPlans(curItem).map(p => p.id)) : null;   // plans for the selected item float to the top
@@ -126,14 +126,61 @@ function renderList() {
   } else if (tab === 'progress') {
     el.innerHTML = renderProgress();
   } else {
-    const arr = CAT.photos.filter(p => (!cat || p.cat === cat) && (!q || `${p.name} ${p.brand}`.toLowerCase().includes(q)));
-    const slice = arr.slice(0, shown);
-    el.innerHTML = `<div class="grp">${arr.length.toLocaleString()} รูป</div><div class="photos">` + slice.map(p =>
-      `<div class="ph" data-photo="${p.id}"><img loading="lazy" src="${aUrl('photos', p.file)}" alt=""><div>${esc(p.name || p.sheet || '')}${p.brand ? ' · ' + esc(p.brand) : ''}</div>
-      ${curItem ? `<button class="ghost" style="width:100%;border-radius:0" data-link="${p.id}">+ ผูกกับรายการที่เลือก</button>` : ''}</div>`).join('') + '</div>'
-      + (arr.length > shown ? `<div class="more"><button class="ghost" id="moreBtn">แสดงเพิ่ม</button></div>` : '');
+    el.innerHTML = `<div class="grp">แกลเลอรีรูปภาพ</div><p class="muted" style="padding:10px">เลือกหมวด/ชั้น/คำค้นด้านบน ผลลัพธ์แสดงเป็นแกลเลอรีทางขวา คลิกรูปเพื่อดูภาพใหญ่ ข้อมูลรายการ และไปที่หมุดบนแปลน</p>`;
+    renderGallery();
   }
+  document.body.classList.toggle('gal', tab === 'photos');
 }
+
+/* ---------------- photo gallery ---------------- */
+let photoItemMap = null;
+function photoItems(pid) {
+  if (!photoItemMap) { photoItemMap = {}; CAT.items.forEach(it => (it.photos || []).forEach(p => (photoItemMap[p] = photoItemMap[p] || []).push(it))); }
+  const out = [...(photoItemMap[pid] || [])];
+  for (const [iid, ids] of Object.entries(state.photoLinks)) if (ids.includes(pid) && itemById[iid] && !out.includes(itemById[iid])) out.push(itemById[iid]);
+  return out;
+}
+function renderGallery() {
+  const cat = $('catSel').value, fl = $('floorSel').value, q = $('q').value.trim().toLowerCase();
+  const arr = CAT.photos.filter(p => {
+    if (cat && p.cat !== cat) return false;
+    if (fl && !photoItems(p.id).some(it => (it.floor || '') === fl)) return false;
+    if (q && !`${p.name} ${p.brand} ${p.sheet} ${photoItems(p.id).map(i => i.name).join(' ')}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const counts = {}; CAT.photos.forEach(p => counts[p.cat] = (counts[p.cat] || 0) + 1);
+  $('galChips').innerHTML = `<button class="chip ${!cat ? 'on' : ''}" data-gcat="">ทั้งหมด (${CAT.photos.length})</button>` + CAT.categories.filter(c => counts[c.id]).map(c => `<button class="chip ${cat === c.id ? 'on' : ''}" data-gcat="${c.id}">${esc(c.name)} (${counts[c.id]})</button>`).join('');
+  $('galCount').textContent = arr.length.toLocaleString() + ' รูป';
+  const slice = arr.slice(0, Math.max(shown, 150));
+  $('galGrid').innerHTML = slice.map(p => {
+    const its = photoItems(p.id), it = its[0];
+    return `<div class="gcard" data-photo="${p.id}"><img loading="lazy" src="${aUrl('photos', p.file)}" alt=""><div><div class="n">${esc(it ? it.name : (p.name || p.sheet || 'ไม่ระบุชื่อ'))}</div><div class="muted">${it ? floorLbl(it.floor) : 'ยังไม่ผูกรายการ'}${p.brand ? ' · ' + esc(p.brand) : ''}</div></div>
+      ${curItem && !its.includes(curItem) ? `<button class="ghost" style="width:100%;border-radius:0" data-link="${p.id}">+ ผูกกับรายการที่เลือก</button>` : ''}</div>`;
+  }).join('') + (arr.length > slice.length ? `<div class="more" style="grid-column:1/-1"><button class="ghost" id="galMore">แสดงเพิ่ม</button></div>` : '') || '<p class="muted" style="padding:20px">ไม่พบรูปในเงื่อนไขนี้</p>';
+}
+$('galChips').addEventListener('click', e => { const b = e.target.closest('[data-gcat]'); if (!b) return; $('catSel').value = b.dataset.gcat; refreshFloors(); shown = 150; renderList(); });
+$('galGrid').addEventListener('click', e => {
+  if (e.target.id === 'galMore') { shown += 150; renderGallery(); return; }
+  const lk = e.target.closest('[data-link]');
+  if (lk) { e.stopPropagation(); const l = state.photoLinks[curItem.id] = state.photoLinks[curItem.id] || []; if (!l.includes(lk.dataset.link)) { l.push(lk.dataset.link); photoItemMap = null; save(); renderGallery(); toast('ผูกรูปกับรายการแล้ว'); } return; }
+  const c = e.target.closest('[data-photo]'); if (c) openLightbox(photoById[c.dataset.photo]);
+});
+function openLightbox(p) {
+  const its = photoItems(p.id), it = its[0];
+  $('lbImg').src = aUrl('photos', p.file, true); $('lbImg').alt = p.name;
+  $('lbInfo').innerHTML = it ? `<h3>${esc(it.name)}</h3><span class="badge">${esc(catName(it.cat))}</span><span class="badge">${floorLbl(it.floor)}</span>
+    <dl style="display:grid;grid-template-columns:70px 1fr;gap:3px 8px;margin:10px 0">${it.brand ? `<dt class="muted">ยี่ห้อ</dt><dd style="margin:0">${esc(it.brand)}</dd>` : ''}${it.model ? `<dt class="muted">รุ่น</dt><dd style="margin:0">${esc(it.model)}</dd>` : ''}<dt class="muted">จำนวน</dt><dd style="margin:0">${it.qty || '—'} ${esc(it.unit)}</dd>${it.location ? `<dt class="muted">สถานที่</dt><dd style="margin:0">${esc(it.location)}</dd>` : ''}</dl>
+    ${its.length > 1 ? `<p class="muted">รูปนี้ใช้กับอีก ${its.length - 1} รายการ</p>` : ''}
+    ${(() => { const pn = pinsOfItem(it.id); return `<button id="lbGoto" data-lbitem="${it.id}" ${pn.length ? '' : 'disabled title="รายการนี้ยังไม่ได้ปักหมุด"'}>📍 ไปที่หมุดบนแปลน${pn.length ? ' (' + pn.length + ')' : ''}</button>`; })()}`
+    : `<h3>${esc(p.name || p.sheet || 'ไม่ระบุชื่อ')}</h3><p class="muted">รูปนี้ยังไม่ผูกกับรายการครุภัณฑ์ ไปที่แท็บ “ครุภัณฑ์” เลือกรายการ แล้วกลับมากด “ผูกกับรายการที่เลือก”</p>`;
+  $('lightbox').hidden = false;
+}
+$('lightbox').addEventListener('click', e => {
+  const g = e.target.closest('#lbGoto');
+  if (g) { if (g.disabled) return; const it = itemById[g.dataset.lbitem]; $('lightbox').hidden = true; setTab('items'); selectItem(it, { focusPin: true }); return; }
+  if (e.target.closest('#lbInfo')) return;
+  $('lightbox').hidden = true;
+});
 
 /* ---------------- progress dashboard ---------------- */
 function progStats(items) {
@@ -179,13 +226,44 @@ function renderDetail() {
     <h3 style="font-size:14px;margin:16px 0 4px">รูปภาพ (${photos.length})</h3>
     <div class="gallery">${photos.map(p => `<div><img src="${aUrl('photos', p.file)}" data-lb="${p.id}" alt="${esc(p.name)}">${(state.photoLinks[it.id] || []).includes(p.id) ? `<button class="ghost" style="width:100%" data-unlink="${p.id}">เลิกผูก</button>` : ''}</div>`).join('') || '<p class="muted">ไม่พบรูปที่ตรงกัน — ไปแท็บ “รูปภาพ” เพื่อผูกรูปเอง</p>'}</div>`;
 }
+/* ---- manual re-matching of registry numbers (stored in state.matchOverrides, applied on boot) ---- */
+function applyOverride(code, itemId) {
+  const a = assetByCode[code]; if (!a) return;
+  if (assetsByItem[a.i]) assetsByItem[a.i] = assetsByItem[a.i].filter(x => x !== a);
+  a.i = itemId || ''; if (itemId) { a.how = 'manual'; a.cf = 1; (assetsByItem[itemId] = assetsByItem[itemId] || []).push(a); }
+}
+function setMatch(code, itemId) {
+  (state.matchOverrides = state.matchOverrides || {})[code] = itemId || '';
+  applyOverride(code, itemId);
+  if (!itemId) state.pins.forEach(p => { if (p.asset === code) { delete p.asset; delete p.label; } });
+  else state.pins.forEach(p => { if (p.asset === code && p.item !== itemId) { delete p.asset; delete p.label; } });
+  save(); renderDetail(); renderList(); renderPins();
+}
+function openRematch(it) {
+  const d = $('dlg'); d.hidden = false;
+  d.innerHTML = `<div><b>แก้การจับคู่เลขครุภัณฑ์</b><div class="muted" style="font-size:12.5px">รายการ: ${esc(it.name)}</div>
+    <input type="search" id="dlgQ" placeholder="ค้นหาเลขครุภัณฑ์ / ชื่อ / Serial ในทะเบียน"><div class="res" id="dlgRes"></div><div style="text-align:right"><button class="ghost" id="dlgClose">ปิด</button></div></div>`;
+  const draw = () => {
+    const q = $('dlgQ').value.trim().toLowerCase(), all = Object.values(assetByCode);
+    const hit = (q ? all.filter(a => `${a.c} ${a.n} ${a.s}`.toLowerCase().includes(q)) : (assetsByItem[it.id] || []).concat(all.filter(a => !a.i).slice(0, 20))).slice(0, 60);
+    $('dlgRes').innerHTML = hit.map(a => `<div class="asset"><div><b>${esc(a.c)}</b> ${a.i === it.id ? '<span class="badge ok">ปัจจุบัน</span>' : a.i ? `<span class="badge">ใช้กับ: ${esc((itemById[a.i] || {}).name || a.i).slice(0, 40)}</span>` : '<span class="badge cam">ว่าง</span>'}</div>
+      <div class="s muted">${esc([a.n, a.f, a.s && 'S/N ' + a.s].filter(Boolean).join(' · '))}</div>
+      ${a.i === it.id ? `<button class="ghost" data-rm="${esc(a.c)}">ปลดออกจากรายการนี้</button>` : `<button data-pick="${esc(a.c)}">จับคู่กับรายการนี้</button>`}</div>`).join('') || '<p class="muted">ไม่พบในทะเบียน</p>';
+  };
+  draw(); $('dlgQ').oninput = draw;
+  d.onclick = e => {
+    if (e.target === d || e.target.id === 'dlgClose') { d.hidden = true; return; }
+    if (e.target.dataset.pick) { setMatch(e.target.dataset.pick, it.id); toast('จับคู่ด้วยมือแล้ว'); draw(); }
+    if (e.target.dataset.rm) { setMatch(e.target.dataset.rm, ''); toast('ปลดเลขครุภัณฑ์แล้ว'); draw(); }
+  };
+}
 function renderAssets(it) {
   const as = assetsByItem[it.id] || [];
-  if (!as.length) return '<h3 style="font-size:14px;margin:16px 0 4px">เลขครุภัณฑ์</h3><p class="muted">ไม่พบเลขครุภัณฑ์ที่ตรงกันในทะเบียน</p>';
+  if (!as.length) return '<h3 style="font-size:14px;margin:16px 0 4px">เลขครุภัณฑ์</h3><p class="muted">ไม่พบเลขครุภัณฑ์ที่ตรงกันในทะเบียน</p><button class="ghost" id="btnRematch">แก้การจับคู่</button>';
   const pinned = new Set(state.pins.filter(p => p.item === it.id && p.asset).map(p => p.asset));
-  return `<h3 style="font-size:14px;margin:16px 0 4px">เลขครุภัณฑ์ (${as.length}) <span class="muted" style="font-weight:400;font-size:12px">· ปักแล้ว ${pinned.size}</span></h3>
+  return `<h3 style="font-size:14px;margin:16px 0 4px">เลขครุภัณฑ์ (${as.length}) <span class="muted" style="font-weight:400;font-size:12px">· ปักแล้ว ${pinned.size}</span> <button class="ghost" id="btnRematch" style="padding:1px 8px;font-size:12px">แก้การจับคู่</button></h3>
     <div class="assets">${as.slice(0, 200).map(a => `<div class="asset ${curAsset === a.c ? 'sel' : ''}" data-asset="${esc(a.c)}">
-      <div><b>${esc(a.c)}</b>${a.how !== 'exact' ? ` <span class="badge" title="ความมั่นใจ ${a.cf}">${a.how.includes('excess') ? 'เกินจำนวนในเอกสาร' : 'ชื่อใกล้เคียง'}</span>` : ''}</div>
+      <div><b>${esc(a.c)}</b>${a.how !== 'exact' ? ` <span class="badge" title="ความมั่นใจ ${a.cf}">${a.how === 'manual' ? 'จับคู่ด้วยมือ' : a.how.includes('excess') ? 'เกินจำนวนในเอกสาร' : 'ชื่อใกล้เคียง'}</span>` : ''}</div>
       <div class="s muted">${esc([a.f, a.s && 'S/N ' + a.s, a.st].filter(Boolean).join(' · '))}</div>
       <button class="ghost" data-placeasset="${esc(a.c)}">${pinned.has(a.c) ? '✓ ปักแล้ว · ปักใหม่' : '📍 ปักหมุด'}</button></div>`).join('')}
     ${as.length > 200 ? `<p class="muted">แสดง 200 จาก ${as.length}</p>` : ''}</div>`;
@@ -284,7 +362,7 @@ function renderPins() {
   const groups = {};
   for (const p of pinsOfPlan()) { const k = canMerge ? Math.floor(p.x * W / CELL) + ',' + Math.floor(p.y * H / CELL) : p.id; (groups[k] = groups[k] || []).push(p); }
   const pinColor = p => {
-    if ($('pinColor').value === 'status') { const a = p.asset && assetByCode[p.asset]; return !p.asset ? '#8a95a1' : !a || a.how === 'exact' ? '#2f9e5b' : a.how.includes('excess') ? '#e5484d' : '#e0a100'; }
+    if ($('pinColor').value === 'status') { const a = p.asset && assetByCode[p.asset]; return !p.asset ? '#8a95a1' : !a || a.how === 'exact' || a.how === 'manual' ? '#2f9e5b' : a.how.includes('excess') ? '#e5484d' : '#e0a100'; }
     const it = itemById[p.item], i = it ? CAT.categories.findIndex(c => c.id === it.cat) : -1;
     return i < 0 ? '#8a95a1' : `hsl(${(i * 47) % 360} 65% 46%)`;
   };
@@ -359,6 +437,7 @@ $('list').addEventListener('click', e => {
 $('detail').addEventListener('click', e => {
   const t = e.target;
   const rp = t.closest('[data-relplan]'); if (rp) { loadPlan(planById[rp.dataset.relplan]); if (innerWidth <= 1000) $('right').classList.remove('open'); return; }
+  if (t.id === 'btnRematch') { openRematch(curItem); return; }
   if (t.id === 'btnPlace') { $('editMode').checked = true; setEdit(true); if (!curPlan) toast('เลือกแปลนทางซ้ายก่อน แล้วคลิกบนแปลน'); return; }
   if (t.dataset.placeasset) { curAsset = t.dataset.placeasset; $('editMode').checked = true; setEdit(true); renderDetail(); toast(curPlan ? 'คลิกบนแปลนเพื่อวางหมุดของ ' + curAsset : 'เลือกแปลนทางซ้ายก่อน แล้วคลิกบนแปลน'); return; }
   if (t.dataset.delpin) { e.stopPropagation(); if (confirm('ลบหมุดนี้?')) { state.pins = state.pins.filter(p => p.id !== t.dataset.delpin); save(); renderPins(); renderDetail(); renderList(); } return; }
@@ -366,8 +445,6 @@ $('detail').addEventListener('click', e => {
   if (t.dataset.lb) { openLightbox(photoById[t.dataset.lb]); return; }
   const g = t.closest('[data-gopin]'); if (g) { const p = state.pins.find(p => p.id === g.dataset.gopin); if (!p) return; selPin = p.id; const pl = planById[p.plan]; if (curPlan && curPlan.id === pl.id && pageNo === p.page) { renderPins(); scrollToPin(p); } else loadPlan(pl, p.page, p); }
 });
-function openLightbox(p) { $('lbImg').src = aUrl('photos', p.file, true); $('lbImg').alt = p.name; $('lightbox').hidden = false; }
-$('lightbox').addEventListener('click', () => $('lightbox').hidden = true);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') $('lightbox').hidden = true; if ((e.key === 'Delete') && editMode && selPin && !/INPUT|SELECT/.test(document.activeElement.tagName)) { state.pins = state.pins.filter(p => p.id !== selPin); selPin = null; save(); renderPins(); renderDetail(); renderList(); } });
 function setTab(t) { tab = t; document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === t)); $('catSel').parentElement.hidden = t === 'progress'; shown = 150; renderList(); }
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
@@ -378,7 +455,7 @@ $('btnRight').onclick = () => { $('left').classList.remove('open'); $('right').c
 $('catSel').onchange = () => {
   const cat = $('catSel').value; refreshFloors(); shown = 150;
   if (cat && curItem && curItem.cat !== cat) { curItem = null; curAsset = null; selPin = null; renderDetail(); renderEditBar(); }
-  if (cat && curPlan && curPlan.cat !== cat) {          // plan viewer follows the category
+  if (cat && curPlan && curPlan.cat !== cat && tab !== 'photos') {          // plan viewer follows the category
     const first = CAT.plans.find(p => p.cat === cat);
     if (first) loadPlan(first); else { curPlan = null; pdfDoc = null; $('planTitle').textContent = 'หมวดนี้ไม่มีไฟล์แปลน'; $('stage').style.display = 'none'; $('msg').style.display = 'flex'; $('msg').textContent = 'หมวดงานนี้ไม่มีแปลนในเอกสาร'; $('btnPlanItems').hidden = true; $('pageCtl').hidden = true; }
   }
@@ -410,6 +487,11 @@ $('fileImport').onchange = async e => {
   e.target.value = '';
 };
 
+/* ---------------- theme ---------------- */
+function applyTheme(t) { if (t) document.documentElement.dataset.theme = t; const dark = (document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light')) === 'dark'; $('btnTheme').textContent = dark ? '☀' : '☾'; }
+try { applyTheme(localStorage.getItem('eqmap-theme')); } catch { applyTheme(); }
+$('btnTheme').onclick = () => { const dark = $('btnTheme').textContent === '☀'; const t = dark ? 'light' : 'dark'; applyTheme(t); try { localStorage.setItem('eqmap-theme', t); } catch { } };
+
 /* ---------------- boot ---------------- */
 (async function boot() {
   try {
@@ -421,6 +503,7 @@ $('fileImport').onchange = async e => {
     A.assets.forEach(a => { (assetsByItem[a.i] = assetsByItem[a.i] || []).push(a); assetByCode[a.c] = a; });
   } catch { /* assets.json is optional */ }
   await loadState();
+  Object.entries(state.matchOverrides || {}).forEach(([c, i]) => applyOverride(c, i));
   const counts = {}; CAT.items.forEach(i => counts[i.cat] = (counts[i.cat] || 0) + 1);
   $('catSel').innerHTML = '<option value="">ทุกหมวดงาน</option>' + CAT.categories.map(c => `<option value="${c.id}">${c.id} · ${esc(c.name)}${counts[c.id] ? ' (' + counts[c.id] + ')' : ''}</option>`).join('');
   refreshFloors(); renderList();

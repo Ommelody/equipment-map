@@ -1,5 +1,19 @@
 :root{--bg:#f4f6f8;--panel:#fff;--line:#dde2e8;--ink:#1d2733;--muted:#6b7785;--brand:#0b6e99;--brand-d:#085473;--accent:#e5484d;--ok:#2f9e5b}
-@media (prefers-color-scheme:dark){:root{--bg:#12161b;--panel:#1b2128;--line:#2b343e;--ink:#e6ebf0;--muted:#8d99a6;--brand:#3fa7d6;--brand-d:#7cc4e6}}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#12161b;--panel:#1b2128;--line:#2b343e;--ink:#e6ebf0;--muted:#8d99a6;--brand:#3fa7d6;--brand-d:#7cc4e6}}
+:root[data-theme=dark]{--bg:#12161b;--panel:#1b2128;--line:#2b343e;--ink:#e6ebf0;--muted:#8d99a6;--brand:#3fa7d6;--brand-d:#7cc4e6}
+:root[data-theme=dark] #stage canvas{filter:brightness(.85)}
+body.gal #viewer{display:none}body.gal #gallery{display:flex}
+#gallery{display:none;flex-direction:column;min-width:0;min-height:0}
+#galChips{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;background:var(--panel);border-bottom:1px solid var(--line)}
+.chip{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:16px;padding:3px 10px;font-size:12.5px}.chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+#galGrid{flex:1;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;padding:10px;align-content:start}
+.gcard{border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden;cursor:pointer}.gcard:hover{border-color:var(--brand)}
+.gcard img{width:100%;height:130px;object-fit:contain;background:#fff;display:block}
+.gcard div{padding:5px 8px;font-size:12px;line-height:1.3}.gcard .n{font-weight:500}
+.lbBox{display:flex;gap:14px;align-items:stretch;max-width:96vw;max-height:92vh}
+#lbInfo{background:var(--panel);color:var(--ink);border-radius:8px;padding:14px;width:min(300px,40vw);overflow:auto;font-size:13px}
+#lbInfo h3{margin:0 0 6px;font-size:15px}
+@media (max-width:700px){.lbBox{flex-direction:column;overflow:auto}#lbInfo{width:auto}}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{font-family:'IBM Plex Sans Thai',system-ui,sans-serif;background:var(--bg);color:var(--ink);display:flex;flex-direction:column;font-size:14px}

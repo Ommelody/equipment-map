@@ -50,7 +50,9 @@ function readState_() {
   }
   var links = {}, lv = sheet_('links', ['item', 'photo']).getDataRange().getValues();
   for (var j = 1; j < lv.length; j++) { if (!lv[j][0]) continue; (links[lv[j][0]] = links[lv[j][0]] || []).push(String(lv[j][1])); }
-  return { pins: pins, photoLinks: links };
+  var mo = {}, ov = sheet_('overrides', ['asset', 'item']).getDataRange().getValues();
+  for (var k = 1; k < ov.length; k++) if (ov[k][0]) mo[String(ov[k][0])] = String(ov[k][1]);
+  return { pins: pins, photoLinks: links, matchOverrides: mo };
 }
 
 function writeState_(st) {
@@ -63,6 +65,9 @@ function writeState_(st) {
   Object.keys(pl).forEach(function (k) { pl[k].forEach(function (ph) { lr.push([k, ph]); }); });
   var ls = sheet_('links', ['item', 'photo']); ls.getRange(2, 1, Math.max(ls.getMaxRows() - 1, 1), 2).clearContent();
   if (lr.length) ls.getRange(2, 1, lr.length, 2).setValues(lr);
+  var mo = st.matchOverrides || {}, orows = Object.keys(mo).map(function (c) { return [c, mo[c]]; });
+  var os = sheet_('overrides', ['asset', 'item']); os.getRange(2, 1, Math.max(os.getMaxRows() - 1, 1), 2).clearContent();
+  if (orows.length) os.getRange(2, 1, orows.length, 2).setValues(orows);
 }
 
 /** Run once after uploading files to Drive (and again when files change): builds the name -> Drive id index. */
