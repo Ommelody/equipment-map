@@ -23,6 +23,7 @@ function lsSave() { try { localStorage.setItem(LS_STATE, JSON.stringify(state));
 const SHEET = (window.CFG && window.CFG.api) || '';   // Google Apps Script web app URL (Sheet = database, Drive = files)
 const DRIVE_KEY = (window.CFG && window.CFG.driveKey) || '';   // optional Google API key (HTTP-referrer restricted) for fast direct plan download
 const PLANS_BASE = ((window.CFG && window.CFG.plansBase) || '').replace(/\/$/, '');   // e.g. http://localhost:3131/assets/plans
+let localDown = false;                                          // set once the local plan server fails, so later plans go straight to Drive
 let FILES = { plans: {}, photos: {} };
 async function sheetGet(q) { const r = await fetch(SHEET + '?' + q, { cache: 'no-store' }); const j = await r.json(); if (j.error) throw new Error(j.error); return j; }
 async function loadPlanBytes(file, onProgress) {
@@ -331,7 +332,11 @@ async function loadPlan(plan, page = 1, focus = null) {
     const cached = docCache.get(plan.id);
     if (cached) { docCache.delete(plan.id); docCache.set(plan.id, cached); pdfDoc = cached; pageNo = page; $('pgTot').textContent = cached.numPages; $('pageCtl').hidden = cached.numPages < 2; await renderPage(true, focus); return; }
     let localDoc = null;                                           // plans served from this machine (tools\serve.ps1) – fastest
-    if (PLANS_BASE) { try { localDoc = await pdfjsLib.getDocument({ url: `${PLANS_BASE}/${plan.file}`, rangeChunkSize: 1 << 20 }).promise; } catch (e) { console.warn('local plan server unavailable, falling back:', e.message || e); } }
+    if (PLANS_BASE && !localDown) {
+      const lt = pdfjsLib.getDocument({ url: `${PLANS_BASE}/${plan.file}`, rangeChunkSize: 1 << 20 });
+      try { $('msg').textContent = 'กำลังเปิดแปลนจากเครื่องนี้… (ถ้าเบราว์เซอร์ถาม ให้กด “อนุญาต”)'; localDoc = await Promise.race([lt.promise, new Promise((_, rj) => setTimeout(() => rj(new Error('timeout 8s')), 8000))]); }
+      catch (e) { localDown = true; try { lt.destroy(); } catch { } console.warn('local plan server unavailable, falling back to Drive:', e.message || e); toast('ดึงแปลนจากเครื่องนี้ไม่ได้ ใช้ Google Drive แทน'); }
+    }
     const src = localDoc ? null : SHEET ? { data: await loadPlanBytes(plan.file, f => { if (curPlan === plan) $('msg').textContent = `กำลังโหลดแปลนจาก Google Drive… ${Math.round(f * 100)}% (${plan.sizeMB} MB)`; }) } : { url: plan.url || aUrl('plans', plan.file), rangeChunkSize: 1 << 20 };
     const task = localDoc ? { promise: Promise.resolve(localDoc) } : pdfjsLib.getDocument(src);
     $('msg').textContent = 'กำลังเปิดไฟล์แปลน…';
