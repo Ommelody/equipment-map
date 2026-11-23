@@ -22,6 +22,7 @@ function setSync(txt, cls) { const e = $('syncState'); e.textContent = txt; e.cl
 function lsSave() { try { localStorage.setItem(LS_STATE, JSON.stringify(state)); } catch { } }
 const SHEET = (window.CFG && window.CFG.api) || '';   // Google Apps Script web app URL (Sheet = database, Drive = files)
 const DRIVE_KEY = (window.CFG && window.CFG.driveKey) || '';   // optional Google API key (HTTP-referrer restricted) for fast direct plan download
+const PLANS_BASE = ((window.CFG && window.CFG.plansBase) || '').replace(/\/$/, '');   // e.g. http://localhost:3131/assets/plans
 let FILES = { plans: {}, photos: {} };
 async function sheetGet(q) { const r = await fetch(SHEET + '?' + q, { cache: 'no-store' }); const j = await r.json(); if (j.error) throw new Error(j.error); return j; }
 async function loadPlanBytes(file, onProgress) {
@@ -329,8 +330,10 @@ async function loadPlan(plan, page = 1, focus = null) {
   try {
     const cached = docCache.get(plan.id);
     if (cached) { docCache.delete(plan.id); docCache.set(plan.id, cached); pdfDoc = cached; pageNo = page; $('pgTot').textContent = cached.numPages; $('pageCtl').hidden = cached.numPages < 2; await renderPage(true, focus); return; }
-    const src = SHEET ? { data: await loadPlanBytes(plan.file, f => { if (curPlan === plan) $('msg').textContent = `กำลังโหลดแปลนจาก Google Drive… ${Math.round(f * 100)}% (${plan.sizeMB} MB)`; }) } : { url: plan.url || aUrl('plans', plan.file), rangeChunkSize: 1 << 20 };
-    const task = pdfjsLib.getDocument(src);
+    let localDoc = null;                                           // plans served from this machine (tools\serve.ps1) – fastest
+    if (PLANS_BASE) { try { localDoc = await pdfjsLib.getDocument({ url: `${PLANS_BASE}/${plan.file}`, rangeChunkSize: 1 << 20 }).promise; } catch (e) { console.warn('local plan server unavailable, falling back:', e.message || e); } }
+    const src = localDoc ? null : SHEET ? { data: await loadPlanBytes(plan.file, f => { if (curPlan === plan) $('msg').textContent = `กำลังโหลดแปลนจาก Google Drive… ${Math.round(f * 100)}% (${plan.sizeMB} MB)`; }) } : { url: plan.url || aUrl('plans', plan.file), rangeChunkSize: 1 << 20 };
+    const task = localDoc ? { promise: Promise.resolve(localDoc) } : pdfjsLib.getDocument(src);
     $('msg').textContent = 'กำลังเปิดไฟล์แปลน…';
     const doc = await task.promise; if (curPlan !== plan) { doc.destroy(); return; }
     docCache.set(plan.id, doc); while (docCache.size > 4) { const k = docCache.keys().next().value; docCache.get(k).destroy(); docCache.delete(k); bmpCache.forEach((_, bk) => bk.startsWith(k + ':') && bmpCache.delete(bk)); }

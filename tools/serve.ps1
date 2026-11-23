@@ -13,6 +13,10 @@ while ($l.IsListening) {
   $ctx = $l.GetContext(); $rq = $ctx.Request; $rs = $ctx.Response
   try {
     $path = [Uri]::UnescapeDataString($rq.Url.AbsolutePath)
+    # CORS so the hosted site (GitHub Pages) can read plans/photos from this machine; Private-Network header for Chrome
+    $rs.AddHeader('Access-Control-Allow-Origin', '*'); $rs.AddHeader('Access-Control-Allow-Headers', 'Range, Content-Type'); $rs.AddHeader('Access-Control-Allow-Methods', 'GET, PUT, OPTIONS')
+    $rs.AddHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length'); $rs.AddHeader('Access-Control-Allow-Private-Network', 'true')
+    if ($rq.HttpMethod -eq 'OPTIONS') { $rs.StatusCode = 204; continue }
     if ($path -eq '/api/state') {
       if ($rq.HttpMethod -eq 'PUT') {
         $sr = New-Object IO.StreamReader($rq.InputStream, [Text.Encoding]::UTF8); $body = $sr.ReadToEnd()
