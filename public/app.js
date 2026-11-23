@@ -19,7 +19,28 @@ let shown = 150;                       // list paging
 let saveTimer = null;
 function setSync(txt, cls) { const e = $('syncState'); e.textContent = txt; e.className = 'sync ' + (cls || ''); }
 function lsSave() { try { localStorage.setItem(LS_STATE, JSON.stringify(state)); } catch { } }
+const SHEET = (window.CFG && window.CFG.api) || '';   // Google Apps Script web app URL (Sheet = database, Drive = files)
+let FILES = { plans: {}, photos: {} };
+async function sheetGet(q) { const r = await fetch(SHEET + '?' + q, { cache: 'no-store' }); const j = await r.json(); if (j.error) throw new Error(j.error); return j; }
+async function loadPlanBytes(file, onProgress) {
+  const id = FILES.plans[file]; if (!id) throw new Error('ไม่พบไฟล์ ' + file + ' ใน Google Drive (รัน buildIndex แล้วหรือยัง?)');
+  const size = 8 * 1024 * 1024; let first = await sheetGet(`action=chunk&id=${id}&n=0&size=${size}`);
+  const total = first.total, out = new Uint8Array(total), put = (n, b64) => { const bin = atob(b64); const off = n * size; for (let i = 0; i < bin.length; i++) out[off + i] = bin.charCodeAt(i); };
+  put(0, first.data); onProgress && onProgress(Math.min(1, size / total));
+  const n = Math.ceil(total / size); let done = 1;
+  const queue = Array.from({ length: n - 1 }, (_, k) => k + 1);
+  await Promise.all([0, 1, 2].map(async () => { while (queue.length) { const k = queue.shift(); const c = await sheetGet(`action=chunk&id=${id}&n=${k}&size=${size}`); put(k, c.data); done++; onProgress && onProgress(done / n); } }));
+  return out;
+}
 async function loadState() {
+  if (SHEET) {
+    try {
+      const [st, fl] = await Promise.all([sheetGet('action=state'), sheetGet('action=files')]);
+      state = Object.assign({ pins: [], photoLinks: {} }, st); FILES = fl; apiOK = true; setSync('● ซิงก์กับ Google Sheet', 'ok'); return;
+    } catch (e) { setSync('✕ เชื่อม Google Sheet ไม่ได้: ' + e.message, 'err'); }
+    try { const s = JSON.parse(localStorage.getItem(LS_STATE) || 'null'); if (s) state = Object.assign({ pins: [], photoLinks: {} }, s); } catch { }
+    return;
+  }
   try {
     const r = await fetch('api/state', { cache: 'no-store' });
     if (r.ok && (r.headers.get('content-type') || '').includes('json')) {
@@ -37,6 +58,13 @@ function save() {
   saveTimer = setTimeout(async () => {
     try {
       const tok = localStorage.getItem(LS_TOKEN);
+      if (SHEET) {
+        const r = await fetch(SHEET, { method: 'POST', headers: { 'content-type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: tok || undefined, state }) });
+        const j = await r.json();
+        if (j.status === 401) { const t = prompt('ใส่รหัสสำหรับแก้ไข (EDIT_TOKEN)'); if (t) { localStorage.setItem(LS_TOKEN, t); return save(); } setSync('✕ ไม่มีสิทธิ์บันทึก', 'err'); return; }
+        if (j.error) throw new Error(j.error);
+        setSync('● บันทึกลง Google Sheet แล้ว', 'ok'); return;
+      }
       const r = await fetch('api/state', { method: 'PUT', headers: Object.assign({ 'content-type': 'application/json' }, tok ? { authorization: 'Bearer ' + tok } : {}), body: JSON.stringify(state) });
       if (r.status === 401) { const t = prompt('ใส่รหัสสำหรับแก้ไข (EDIT_TOKEN)'); if (t) { localStorage.setItem(LS_TOKEN, t); return save(); } setSync('✕ ไม่มีสิทธิ์บันทึก', 'err'); return; }
       if (!r.ok) throw new Error(r.status);
@@ -47,7 +75,7 @@ function save() {
 function toast(t) { const e = $('toast'); e.textContent = t; e.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => e.hidden = true, 2200); }
 
 /* ---------------- helpers ---------------- */
-const aUrl = (kind, file) => `${CAT.assetBase}/${kind}/${file}`;
+const aUrl = (kind, file, big) => SHEET && FILES[kind] ? `https://drive.google.com/thumbnail?id=${FILES[kind][file] || ''}&sz=w${big ? 2000 : 600}` : `${CAT.assetBase}/${kind}/${file}`;
 const pinsOfItem = id => state.pins.filter(p => p.item === id);
 const pinsOfPlan = () => state.pins.filter(p => curPlan && p.plan === curPlan.id && p.page === pageNo);
 const itemPhotos = it => { const ids = new Set([...(it.photos || []), ...(state.photoLinks[it.id] || [])]); return [...ids].map(i => photoById[i]).filter(Boolean); };
@@ -197,7 +225,8 @@ async function loadPlan(plan, page = 1, focus = null) {
   curPlan = plan; $('planTitle').textContent = plan.title; $('btnPlanItems').hidden = false; if (curItem) renderDetail(); $('msg').textContent = 'กำลังโหลดแปลน… (' + plan.sizeMB + ' MB)'; $('msg').style.display = 'flex'; $('stage').style.display = 'none';
   renderList();
   try {
-    const task = pdfjsLib.getDocument({ url: plan.url || aUrl('plans', plan.file), rangeChunkSize: 1 << 20 });
+    const src = SHEET ? { data: await loadPlanBytes(plan.file, f => { if (curPlan === plan) $('msg').textContent = `กำลังโหลดแปลนจาก Google Drive… ${Math.round(f * 100)}% (${plan.sizeMB} MB)`; }) } : { url: plan.url || aUrl('plans', plan.file), rangeChunkSize: 1 << 20 };
+    const task = pdfjsLib.getDocument(src);
     const doc = await task.promise; if (curPlan !== plan) return;
     pdfDoc = doc; pageNo = page; $('pgTot').textContent = doc.numPages; $('pageCtl').hidden = doc.numPages < 2;
     await renderPage(true, focus);
@@ -320,7 +349,7 @@ $('detail').addEventListener('click', e => {
   if (t.dataset.lb) { openLightbox(photoById[t.dataset.lb]); return; }
   const g = t.closest('[data-gopin]'); if (g) { const p = state.pins.find(p => p.id === g.dataset.gopin); if (!p) return; selPin = p.id; const pl = planById[p.plan]; if (curPlan && curPlan.id === pl.id && pageNo === p.page) { renderPins(); scrollToPin(p); } else loadPlan(pl, p.page, p); }
 });
-function openLightbox(p) { $('lbImg').src = aUrl('photos', p.file); $('lbImg').alt = p.name; $('lightbox').hidden = false; }
+function openLightbox(p) { $('lbImg').src = aUrl('photos', p.file, true); $('lbImg').alt = p.name; $('lightbox').hidden = false; }
 $('lightbox').addEventListener('click', () => $('lightbox').hidden = true);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') $('lightbox').hidden = true; if ((e.key === 'Delete') && editMode && selPin && !/INPUT|SELECT/.test(document.activeElement.tagName)) { state.pins = state.pins.filter(p => p.id !== selPin); selPin = null; save(); renderPins(); renderDetail(); renderList(); } });
 function setTab(t) { tab = t; document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === t)); $('catSel').parentElement.hidden = t === 'progress'; shown = 150; renderList(); }
