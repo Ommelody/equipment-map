@@ -26,3 +26,13 @@
 - แปลนโหลดผ่านสคริปต์เป็นก้อน ๆ ครั้งแรกของไฟล์ใหญ่ช้ากว่าปกติ
 - การบันทึกคือเขียนทับทั้งชุด ถ้าสองคนแก้พร้อมกัน คนที่บันทึกทีหลังชนะ
 - Google จำกัดโควต้า Apps Script ต่อวัน การใช้ภายในทีมเล็กไม่น่าเกิน
+
+## 4) (แนะนำ) โหลดแปลนตรงจาก Drive ให้เร็ว
+แปลนผ่าน Apps Script ช้า (ไฟล์ 22 MB เกิน 30 วินาที) วิธีโหลดตรงจาก Drive API ใช้เวลาไม่กี่วินาที
+1. console.cloud.google.com -> สร้างโปรเจกต์ -> APIs & Services -> Library -> เปิด **Google Drive API**
+2. Credentials -> Create credentials -> API key -> Edit API key
+   - Application restrictions: **Websites** เพิ่ม `https://ommelody.github.io/*` (และ `http://localhost:3140/*` ถ้าจะทดสอบในเครื่อง)
+   - API restrictions: Restrict key -> เลือก Google Drive API
+3. ใน Drive แชร์โฟลเดอร์ `plans` เป็น **Anyone with the link (Viewer)** ด้วย (ต้องแชร์ ไม่เช่นนั้น key ใช้อ่านไฟล์ไม่ได้)
+4. ใส่ key ใน `public/config.js` ที่ `driveKey: '...'` แล้ว push
+ถ้าโหลดตรงไม่สำเร็จ ระบบจะย้อนไปใช้ Apps Script อัตโนมัติ

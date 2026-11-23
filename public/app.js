@@ -21,15 +21,29 @@ let saveTimer = null;
 function setSync(txt, cls) { const e = $('syncState'); e.textContent = txt; e.className = 'sync ' + (cls || ''); }
 function lsSave() { try { localStorage.setItem(LS_STATE, JSON.stringify(state)); } catch { } }
 const SHEET = (window.CFG && window.CFG.api) || '';   // Google Apps Script web app URL (Sheet = database, Drive = files)
+const DRIVE_KEY = (window.CFG && window.CFG.driveKey) || '';   // optional Google API key (HTTP-referrer restricted) for fast direct plan download
 let FILES = { plans: {}, photos: {} };
 async function sheetGet(q) { const r = await fetch(SHEET + '?' + q, { cache: 'no-store' }); const j = await r.json(); if (j.error) throw new Error(j.error); return j; }
 async function loadPlanBytes(file, onProgress) {
   const id = FILES.plans[file]; if (!id) throw new Error('ไม่พบไฟล์ ' + file + ' ใน Google Drive (รัน buildIndex แล้วหรือยัง?)');
   const ckey = 'https://plans.local/' + id;                     // browser cache: a plan downloaded once opens instantly next time
   try { const c = await caches.open('eqmap-plans'), hit = await c.match(ckey); if (hit) return new Uint8Array(await hit.arrayBuffer()); } catch { }
-  const bytes = await loadPlanBytesNet(id, onProgress);
+  let bytes = null;
+  if (DRIVE_KEY) {                                              // fast path: direct Drive API download (file must be shared "Anyone with the link")
+    try { bytes = await loadPlanBytesDirect(id, onProgress); } catch (e) { console.warn('direct Drive load failed, falling back to Apps Script:', e.message); }
+  }
+  if (!bytes) bytes = await loadPlanBytesNet(id, onProgress);
   try { const c = await caches.open('eqmap-plans'); await c.put(ckey, new Response(bytes)); } catch { }
   return bytes;
+}
+async function loadPlanBytesDirect(id, onProgress) {
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&key=${encodeURIComponent(DRIVE_KEY)}`);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const total = +r.headers.get('content-length') || 0, rd = r.body.getReader(), parts = []; let got = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; if (onProgress && total) onProgress(got / total); }
+  const out = new Uint8Array(got); let o = 0; for (const p of parts) { out.set(p, o); o += p.length; }
+  if (got < 1000 || String.fromCharCode(out[0], out[1], out[2], out[3]) !== '%PDF') throw new Error('not a PDF');
+  return out;
 }
 async function loadPlanBytesNet(id, onProgress) {
   const size = 2 * 1024 * 1024; let first = await sheetGet(`action=chunk&id=${id}&n=0&size=${size}`);
