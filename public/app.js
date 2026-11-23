@@ -25,12 +25,19 @@ let FILES = { plans: {}, photos: {} };
 async function sheetGet(q) { const r = await fetch(SHEET + '?' + q, { cache: 'no-store' }); const j = await r.json(); if (j.error) throw new Error(j.error); return j; }
 async function loadPlanBytes(file, onProgress) {
   const id = FILES.plans[file]; if (!id) throw new Error('ไม่พบไฟล์ ' + file + ' ใน Google Drive (รัน buildIndex แล้วหรือยัง?)');
-  const size = 8 * 1024 * 1024; let first = await sheetGet(`action=chunk&id=${id}&n=0&size=${size}`);
+  const ckey = 'https://plans.local/' + id;                     // browser cache: a plan downloaded once opens instantly next time
+  try { const c = await caches.open('eqmap-plans'), hit = await c.match(ckey); if (hit) return new Uint8Array(await hit.arrayBuffer()); } catch { }
+  const bytes = await loadPlanBytesNet(id, onProgress);
+  try { const c = await caches.open('eqmap-plans'); await c.put(ckey, new Response(bytes)); } catch { }
+  return bytes;
+}
+async function loadPlanBytesNet(id, onProgress) {
+  const size = 2 * 1024 * 1024; let first = await sheetGet(`action=chunk&id=${id}&n=0&size=${size}`);
   const total = first.total, out = new Uint8Array(total), put = (n, b64) => { const bin = atob(b64); const off = n * size; for (let i = 0; i < bin.length; i++) out[off + i] = bin.charCodeAt(i); };
   put(0, first.data); onProgress && onProgress(Math.min(1, size / total));
   const n = Math.ceil(total / size); let done = 1;
   const queue = Array.from({ length: n - 1 }, (_, k) => k + 1);
-  await Promise.all([0, 1, 2].map(async () => { while (queue.length) { const k = queue.shift(); const c = await sheetGet(`action=chunk&id=${id}&n=${k}&size=${size}`); put(k, c.data); done++; onProgress && onProgress(done / n); } }));
+  await Promise.all(Array.from({ length: 10 }, async () => { while (queue.length) { const k = queue.shift(); const c = await sheetGet(`action=chunk&id=${id}&n=${k}&size=${size}`); put(k, c.data); done++; onProgress && onProgress(done / n); } }));
   return out;
 }
 async function loadState() {
