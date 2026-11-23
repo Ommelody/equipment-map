@@ -1,0 +1,373 @@
+'use strict';
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const LS_STATE = 'eqmap-state-v1', LS_TOKEN = 'eqmap-token';
+
+let CAT = null;                       // catalog.json
+let state = { pins: [], photoLinks: {} };
+let apiOK = false;
+let itemById = {}, photoById = {}, planById = {};
+let tab = 'plans', editMode = false;
+let curPlan = null, pdfDoc = null, pageNo = 1, zoom = 1, fitZoom = 1, baseW = 0, baseH = 0, renderTok = 0;
+let curItem = null, selPin = null, curAsset = null;   // curAsset = asset code chosen for the next pin
+let assetsByItem = {}, assetByCode = {};
+let shown = 150;                       // list paging
+
+/* ---------------- storage ---------------- */
+let saveTimer = null;
+function setSync(txt, cls) { const e = $('syncState'); e.textContent = txt; e.className = 'sync ' + (cls || ''); }
+function lsSave() { try { localStorage.setItem(LS_STATE, JSON.stringify(state)); } catch { } }
+async function loadState() {
+  try {
+    const r = await fetch('api/state', { cache: 'no-store' });
+    if (r.ok && (r.headers.get('content-type') || '').includes('json')) {
+      state = Object.assign({ pins: [], photoLinks: {} }, await r.json()); apiOK = true; setSync('● ซิงก์กับเซิร์ฟเวอร์', 'ok'); return;
+    }
+  } catch { }
+  try { const s = JSON.parse(localStorage.getItem(LS_STATE) || 'null'); if (s) state = Object.assign({ pins: [], photoLinks: {} }, s); } catch { }
+  setSync('○ บันทึกในเบราว์เซอร์นี้เท่านั้น', '');
+}
+function save() {
+  lsSave();
+  if (!apiOK) return;
+  setSync('… กำลังบันทึก', '');
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      const tok = localStorage.getItem(LS_TOKEN);
+      const r = await fetch('api/state', { method: 'PUT', headers: Object.assign({ 'content-type': 'application/json' }, tok ? { authorization: 'Bearer ' + tok } : {}), body: JSON.stringify(state) });
+      if (r.status === 401) { const t = prompt('ใส่รหัสสำหรับแก้ไข (EDIT_TOKEN)'); if (t) { localStorage.setItem(LS_TOKEN, t); return save(); } setSync('✕ ไม่มีสิทธิ์บันทึก', 'err'); return; }
+      if (!r.ok) throw new Error(r.status);
+      setSync('● บันทึกแล้ว', 'ok');
+    } catch (e) { setSync('✕ บันทึกไม่สำเร็จ (เก็บไว้ในเครื่อง)', 'err'); }
+  }, 600);
+}
+function toast(t) { const e = $('toast'); e.textContent = t; e.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => e.hidden = true, 2200); }
+
+/* ---------------- helpers ---------------- */
+const aUrl = (kind, file) => `${CAT.assetBase}/${kind}/${file}`;
+const pinsOfItem = id => state.pins.filter(p => p.item === id);
+const pinsOfPlan = () => state.pins.filter(p => curPlan && p.plan === curPlan.id && p.page === pageNo);
+const itemPhotos = it => { const ids = new Set([...(it.photos || []), ...(state.photoLinks[it.id] || [])]); return [...ids].map(i => photoById[i]).filter(Boolean); };
+const floorLbl = f => !f ? '—' : /^\d+$/.test(f) ? 'ชั้น ' + f : (f === 'B' ? 'ชั้นใต้ดิน (B)' : f);
+const catName = id => (CAT.categories.find(c => c.id === id) || {}).name || id;
+const uid = () => 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+/* ---------------- left lists ---------------- */
+function filteredItems() {
+  const cat = $('catSel').value, fl = $('floorSel').value, q = $('q').value.trim().toLowerCase(), un = $('onlyUnpinned').checked;
+  return CAT.items.filter(it => {
+    if (cat && it.cat !== cat) return false;
+    if (fl && (it.floor || '') !== fl) return false;
+    if (un && pinsOfItem(it.id).length >= Math.max(1, it.qty || 1)) return false;
+    if (q && !(`${it.name} ${it.brand} ${it.model} ${it.location} ${it.group || ''} ${(assetsByItem[it.id] || []).map(a => a.c + ' ' + a.s).join(' ')}`.toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+function refreshFloors() {
+  const cat = $('catSel').value, s = $('floorSel'), keep = s.value;
+  const set = new Set(CAT.items.filter(i => !cat || i.cat === cat).map(i => i.floor || ''));
+  const arr = [...set].sort((a, b) => (+a || 99) - (+b || 99) || a.localeCompare(b));
+  s.innerHTML = '<option value="">ทุกชั้น</option>' + arr.map(f => `<option value="${esc(f)}">${f ? floorLbl(f) : '(ไม่ระบุชั้น)'}</option>`).join('');
+  if (arr.includes(keep)) s.value = keep;
+}
+function renderList() {
+  const el = $('list'), cat = $('catSel').value, q = $('q').value.trim().toLowerCase();
+  $('floorSel').hidden = tab !== 'items'; $('pinFilterWrap').hidden = tab !== 'items';
+  if (tab === 'plans') {
+    const arr = CAT.plans.filter(p => (!cat || p.cat === cat) && (!q || p.title.toLowerCase().includes(q)));
+    el.innerHTML = arr.map(p => {
+      const n = state.pins.filter(x => x.plan === p.id).length;
+      return `<div class="row ${curPlan && curPlan.id === p.id ? 'sel' : ''}" data-plan="${p.id}"><div class="t">${esc(p.title)}</div>
+        <div class="s"><span class="badge">${esc(catName(p.cat))}</span>${p.floor ? `<span class="badge">${floorLbl(p.floor)}</span>` : ''}<span class="badge">${p.sizeMB} MB</span>${n ? `<span class="badge ok">${n} หมุด</span>` : ''}</div></div>`;
+    }).join('') || '<div class="more muted">ไม่พบแปลน</div>';
+  } else if (tab === 'items') {
+    const arr = filteredItems(); const slice = arr.slice(0, shown);
+    el.innerHTML = `<div class="grp">${arr.length.toLocaleString()} รายการ</div>` + slice.map(it => {
+      const n = pinsOfItem(it.id).length, ph = itemPhotos(it).length, need = Math.max(1, it.qty || 1);
+      return `<div class="row ${curItem && curItem.id === it.id ? 'sel' : ''}" data-item="${it.id}"><div class="t">${esc(it.name)}</div>
+        <div class="s">${esc([it.brand, it.model].filter(Boolean).join(' · '))}</div>
+        <div class="s"><span class="badge">${floorLbl(it.floor)}</span>${it.location ? `<span class="badge">${esc(it.location.slice(0, 40))}</span>` : ''}
+        <span class="badge ${n ? 'ok' : ''}">หมุด ${n}/${need}</span>${(assetsByItem[it.id] || []).length ? `<span class="badge cam">เลขครุภัณฑ์ ${assetsByItem[it.id].length}</span>` : ''}${ph ? `<span class="badge cam">📷 ${ph}</span>` : ''}</div></div>`;
+    }).join('') + (arr.length > shown ? `<div class="more"><button class="ghost" id="moreBtn">แสดงเพิ่ม</button></div>` : '');
+  } else if (tab === 'progress') {
+    el.innerHTML = renderProgress();
+  } else {
+    const arr = CAT.photos.filter(p => (!cat || p.cat === cat) && (!q || `${p.name} ${p.brand}`.toLowerCase().includes(q)));
+    const slice = arr.slice(0, shown);
+    el.innerHTML = `<div class="grp">${arr.length.toLocaleString()} รูป</div><div class="photos">` + slice.map(p =>
+      `<div class="ph" data-photo="${p.id}"><img loading="lazy" src="${aUrl('photos', p.file)}" alt=""><div>${esc(p.name || p.sheet || '')}${p.brand ? ' · ' + esc(p.brand) : ''}</div>
+      ${curItem ? `<button class="ghost" style="width:100%;border-radius:0" data-link="${p.id}">+ ผูกกับรายการที่เลือก</button>` : ''}</div>`).join('') + '</div>'
+      + (arr.length > shown ? `<div class="more"><button class="ghost" id="moreBtn">แสดงเพิ่ม</button></div>` : '');
+  }
+}
+
+/* ---------------- progress dashboard ---------------- */
+function progStats(items) {
+  let done = 0, pinned = 0, withAsset = 0;
+  for (const it of items) { const n = pinsOfItem(it.id).length; if (n >= Math.max(1, it.qty || 1)) done++; if (n) pinned++; if ((assetsByItem[it.id] || []).length) withAsset++; }
+  return { total: items.length, done, pinned, withAsset };
+}
+const pct = (a, b) => b ? Math.round(a * 100 / b) : 0;
+function progRow(label, s, attr) {
+  return `<div class="prow" ${attr}><div class="nm"><span>${esc(label)}</span><span class="muted">${s.done}/${s.total} · ${pct(s.done, s.total)}%</span></div><div class="bar"><i style="width:${pct(s.done, s.total)}%"></i></div></div>`;
+}
+function renderProgress() {
+  const all = progStats(CAT.items), assetsPinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset)).size;
+  const byCat = CAT.categories.map(c => progRow(c.name, progStats(CAT.items.filter(i => i.cat === c.id)), `data-pcat="${c.id}"`)).join('');
+  const floors = [...new Set(CAT.items.map(i => i.floor || ''))].sort((a, b) => (+a || 99) - (+b || 99) || a.localeCompare(b));
+  const byFloor = floors.map(f => progRow(f ? floorLbl(f) : '(ไม่ระบุชั้น)', progStats(CAT.items.filter(i => (i.floor || '') === f)), `data-pfloor="${esc(f)}"`)).join('');
+  return `<div class="prog"><div><div class="big">${pct(all.done, all.total)}%</div><div class="muted">ปักหมุดครบจำนวน ${all.done.toLocaleString()} / ${all.total.toLocaleString()} รายการ</div><div class="bar"><i style="width:${pct(all.done, all.total)}%"></i></div></div>
+    <div class="muted">หมุดทั้งหมด ${state.pins.length.toLocaleString()} · รายการที่มีเลขครุภัณฑ์ ${all.withAsset.toLocaleString()} · เลขครุภัณฑ์ที่ปักแล้ว ${assetsPinned.toLocaleString()} / ${Object.keys(assetByCode).length.toLocaleString()}</div>
+    <h3>ตามหมวดงาน (คลิกเพื่อดูรายการ)</h3>${byCat}<h3>ตามชั้น</h3>${byFloor}</div>`;
+}
+
+/* ---------------- detail panel ---------------- */
+function renderDetail() {
+  const d = $('detail');
+  if (!curItem) { d.innerHTML = '<p class="muted">คลิกหมุดบนแปลน หรือเลือกรายการครุภัณฑ์ เพื่อดูรายละเอียดและรูปภาพ</p>'; return; }
+  const it = curItem, pins = pinsOfItem(it.id), photos = itemPhotos(it);
+  d.innerHTML = `<h2>${esc(it.name)}</h2>
+    <span class="badge">${esc(catName(it.cat))}</span><span class="badge">${floorLbl(it.floor)}</span>
+    <dl>
+      ${it.brand ? `<dt>ยี่ห้อ</dt><dd>${esc(it.brand)}</dd>` : ''}${it.model ? `<dt>รุ่น</dt><dd>${esc(it.model)}</dd>` : ''}
+      <dt>จำนวน</dt><dd>${it.qty || '—'} ${esc(it.unit)}</dd>
+      ${it.location ? `<dt>สถานที่</dt><dd>${esc(it.location)}</dd>` : ''}${it.group ? `<dt>หมวด</dt><dd>${esc(it.group)}</dd>` : ''}
+      ${it.note ? `<dt>หมายเหตุ</dt><dd>${esc(it.note)}</dd>` : ''}
+      <dt>ที่มา</dt><dd class="muted" style="font-size:12px">${esc(it.source)}</dd>
+    </dl>
+    <div class="actions"><button id="btnPlace">📍 ปักหมุดรายการนี้</button></div>
+    ${renderAssets(it)}
+    <h3 style="font-size:14px;margin:16px 0 4px">แปลนที่เกี่ยวข้อง</h3>
+    ${relatedPlans(it).slice(0, 8).map(p => `<div class="row" style="padding:6px 0" data-relplan="${p.id}"><div class="t" style="font-weight:400">${curPlan && curPlan.id === p.id ? '▶ ' : ''}${esc(p.title)}</div></div>`).join('') || '<p class="muted">ไม่พบแปลนในหมวดนี้</p>'}
+    <h3 style="font-size:14px;margin:16px 0 4px">ตำแหน่งบนแปลน (${pins.length})</h3>
+    ${pins.map(p => { const pl = planById[p.plan]; return `<div class="row" style="padding:6px 0" data-gopin="${p.id}"><div class="t" style="font-weight:400">${p.asset ? '<b>' + esc(p.asset) + '</b> · ' : ''}${esc(pl ? pl.title : p.plan)} <span class="muted">· หน้า ${p.page}</span></div>
+      <div class="s"><button class="ghost" data-delpin="${p.id}">ลบหมุด</button></div></div>`; }).join('') || '<p class="muted">ยังไม่ได้ปักหมุด</p>'}
+    <h3 style="font-size:14px;margin:16px 0 4px">รูปภาพ (${photos.length})</h3>
+    <div class="gallery">${photos.map(p => `<div><img src="${aUrl('photos', p.file)}" data-lb="${p.id}" alt="${esc(p.name)}">${(state.photoLinks[it.id] || []).includes(p.id) ? `<button class="ghost" style="width:100%" data-unlink="${p.id}">เลิกผูก</button>` : ''}</div>`).join('') || '<p class="muted">ไม่พบรูปที่ตรงกัน — ไปแท็บ “รูปภาพ” เพื่อผูกรูปเอง</p>'}</div>`;
+}
+function renderAssets(it) {
+  const as = assetsByItem[it.id] || [];
+  if (!as.length) return '<h3 style="font-size:14px;margin:16px 0 4px">เลขครุภัณฑ์</h3><p class="muted">ไม่พบเลขครุภัณฑ์ที่ตรงกันในทะเบียน</p>';
+  const pinned = new Set(state.pins.filter(p => p.item === it.id && p.asset).map(p => p.asset));
+  return `<h3 style="font-size:14px;margin:16px 0 4px">เลขครุภัณฑ์ (${as.length}) <span class="muted" style="font-weight:400;font-size:12px">· ปักแล้ว ${pinned.size}</span></h3>
+    <div class="assets">${as.slice(0, 200).map(a => `<div class="asset ${curAsset === a.c ? 'sel' : ''}" data-asset="${esc(a.c)}">
+      <div><b>${esc(a.c)}</b>${a.how !== 'exact' ? ` <span class="badge" title="ความมั่นใจ ${a.cf}">${a.how.includes('excess') ? 'เกินจำนวนในเอกสาร' : 'ชื่อใกล้เคียง'}</span>` : ''}</div>
+      <div class="s muted">${esc([a.f, a.s && 'S/N ' + a.s, a.st].filter(Boolean).join(' · '))}</div>
+      <button class="ghost" data-placeasset="${esc(a.c)}">${pinned.has(a.c) ? '✓ ปักแล้ว · ปักใหม่' : '📍 ปักหมุด'}</button></div>`).join('')}
+    ${as.length > 200 ? `<p class="muted">แสดง 200 จาก ${as.length}</p>` : ''}</div>`;
+}
+/* item <-> plan linking: same work category + matching floor (floors parsed from the plan title) */
+const normFloor = f => /ใต้ดิน|^B/i.test(f) ? 'B' : String(f).trim();
+function planFloors(p) {
+  const out = new Set(); const m = (p.title || '').match(/ชั้น\s*([^\s]*(?:\s*,\s*\d+)*)/g) || [];
+  m.forEach(s => (s.match(/\d+|ใต้ดิน/g) || []).forEach(x => out.add(normFloor(x))));
+  if (/ใต้ดิน|ชั้น\s*B/i.test(p.title || '')) out.add('B');
+  if (!out.size && p.floor) out.add(normFloor(p.floor));
+  return out;
+}
+function relatedPlans(it) {
+  const same = CAT.plans.filter(p => p.cat === it.cat); if (!same.length) return [];
+  const f = it.floor ? normFloor(it.floor) : '';
+  const hit = f ? same.filter(p => planFloors(p).has(f)) : [];
+  return hit.length ? hit : same;
+}
+function plansWithPins(it) { return [...new Set(pinsOfItem(it.id).map(p => p.plan))].map(id => planById[id]).filter(Boolean); }
+function selectItem(it, opts = {}) {
+  curItem = it; curAsset = null; renderDetail(); renderList(); renderEditBar();
+  if (innerWidth <= 1000 && opts.focusPin) { $('left').classList.remove('open'); $('right').classList.add('open'); }
+  if (!opts.focusPin) return;
+  const pins = pinsOfItem(it.id);
+  const here = pins.find(p => curPlan && p.plan === curPlan.id && p.page === pageNo);
+  if (here) { selPin = here.id; renderPins(); scrollToPin(here); return; }
+  if (pins.length) { const p = pins[0]; selPin = p.id; loadPlan(planById[p.plan], p.page, p); return; }
+  const rel = relatedPlans(it);
+  if (rel.length && !(curPlan && rel.some(p => p.id === curPlan.id))) { loadPlan(rel[0]); toast('เปิดแปลนที่เกี่ยวข้อง: ' + rel[0].title); }
+}
+function showItemsOfPlan(p) {
+  const fl = [...planFloors(p)]; $('catSel').value = p.cat; refreshFloors();
+  $('floorSel').value = fl.length === 1 && [...$('floorSel').options].some(o => normFloor(o.value) === fl[0]) ? [...$('floorSel').options].find(o => normFloor(o.value) === fl[0]).value : '';
+  $('q').value = ''; setTab('items'); $('left').classList.add('open');
+}
+
+/* ---------------- plan viewer ---------------- */
+async function loadPlan(plan, page = 1, focus = null) {
+  curPlan = plan; $('planTitle').textContent = plan.title; $('btnPlanItems').hidden = false; if (curItem) renderDetail(); $('msg').textContent = 'กำลังโหลดแปลน… (' + plan.sizeMB + ' MB)'; $('msg').style.display = 'flex'; $('stage').style.display = 'none';
+  renderList();
+  try {
+    const task = pdfjsLib.getDocument({ url: plan.url || aUrl('plans', plan.file), rangeChunkSize: 1 << 20 });
+    const doc = await task.promise; if (curPlan !== plan) return;
+    pdfDoc = doc; pageNo = page; $('pgTot').textContent = doc.numPages; $('pageCtl').hidden = doc.numPages < 2;
+    await renderPage(true, focus);
+  } catch (e) { $('msg').textContent = 'โหลดแปลนไม่สำเร็จ: ' + (e.message || e) + '\n(ถ้ายังไม่ได้อัปโหลดไฟล์ไป R2 ให้ตรวจสอบโฟลเดอร์ assets-upload)'; }
+}
+async function renderPage(fit, focus) {
+  const tok = ++renderTok; const pg = await pdfDoc.getPage(pageNo); if (tok !== renderTok) return;
+  const v1 = pg.getViewport({ scale: 1 }); baseW = v1.width; baseH = v1.height;
+  const sc = $('scroller');
+  if (fit) { fitZoom = Math.min((sc.clientWidth - 40) / baseW, (sc.clientHeight - 40) / baseH); zoom = fitZoom; }
+  const vp = pg.getViewport({ scale: zoom });
+  const dpr = Math.min(window.devicePixelRatio || 1, 2), cap = 9000;
+  const out = Math.min(dpr, cap / vp.width, cap / vp.height);
+  const cv = $('cv'); cv.width = Math.floor(vp.width * out); cv.height = Math.floor(vp.height * out);
+  cv.style.width = vp.width + 'px'; cv.style.height = vp.height + 'px';
+  $('msg').style.display = 'none'; $('stage').style.display = 'block'; $('pgNum').textContent = pageNo; $('zLbl').textContent = Math.round(zoom / fitZoom * 100) + '%';
+  renderPins();
+  const rt = pg.render({ canvasContext: cv.getContext('2d'), viewport: pg.getViewport({ scale: zoom * out }) });
+  try { await rt.promise; } catch { }
+  if (focus) scrollToPin(focus);
+}
+function setZoom(z, anchor) {
+  const sc = $('scroller'); const ax = anchor ? anchor.x : sc.clientWidth / 2, ay = anchor ? anchor.y : sc.clientHeight / 2;
+  const px = (sc.scrollLeft + ax - $('stage').offsetLeft) / $('stage').offsetWidth, py = (sc.scrollTop + ay - $('stage').offsetTop) / $('stage').offsetHeight;
+  zoom = Math.max(fitZoom * 0.3, Math.min(fitZoom * 12, z));
+  clearTimeout(setZoom.t); setTimeout(renderPins, 0);
+  // resize instantly with CSS, re-render sharply shortly after
+  const w = baseW * zoom, h = baseH * zoom, cv = $('cv'); cv.style.width = w + 'px'; cv.style.height = h + 'px'; $('zLbl').textContent = Math.round(zoom / fitZoom * 100) + '%';
+  sc.scrollLeft = px * w + $('stage').offsetLeft - ax; sc.scrollTop = py * h + $('stage').offsetTop - ay;
+  setZoom.t = setTimeout(() => renderPage(false), 250);
+}
+function scrollToPin(p) {
+  const sc = $('scroller'), st = $('stage');
+  sc.scrollTo({ left: st.offsetLeft + p.x * st.offsetWidth - sc.clientWidth / 2, top: st.offsetTop + p.y * st.offsetHeight - sc.clientHeight / 2, behavior: 'smooth' });
+}
+function renderPins() {
+  const W = $('stage').offsetWidth || 1, H = $('stage').offsetHeight || 1, CELL = 40, canMerge = zoom < fitZoom * 11;
+  const groups = {};
+  for (const p of pinsOfPlan()) { const k = canMerge ? Math.floor(p.x * W / CELL) + ',' + Math.floor(p.y * H / CELL) : p.id; (groups[k] = groups[k] || []).push(p); }
+  const pinColor = p => {
+    if ($('pinColor').value === 'status') { const a = p.asset && assetByCode[p.asset]; return !p.asset ? '#8a95a1' : !a || a.how === 'exact' ? '#2f9e5b' : a.how.includes('excess') ? '#e5484d' : '#e0a100'; }
+    const it = itemById[p.item], i = it ? CAT.categories.findIndex(c => c.id === it.cat) : -1;
+    return i < 0 ? '#8a95a1' : `hsl(${(i * 47) % 360} 65% 46%)`;
+  };
+  $('pins').innerHTML = Object.values(groups).map(g => {
+    if (g.length > 1 && !g.some(p => p.id === selPin)) {
+      const cx = g.reduce((s, p) => s + p.x, 0) / g.length, cy = g.reduce((s, p) => s + p.y, 0) / g.length;
+      return `<div class="cluster" data-cluster="${cx},${cy}" style="left:${cx * 100}%;top:${cy * 100}%">${g.length}</div>`;
+    }
+    return g.map(p => {
+      const it = itemById[p.item];
+      return `<div class="pin ${selPin === p.id ? 'sel' : ''}" data-pin="${p.id}" style="left:${p.x * 100}%;top:${p.y * 100}%;--pc:${pinColor(p)}"><span class="lbl">${esc(p.label || (it ? it.name : '?'))}</span><span class="dot"></span></div>`;
+    }).join('');
+  }).join('');
+  $('stage').parentElement.classList.toggle('hide-labels', !$('showLabels').checked);
+}
+function renderEditBar() {
+  const b = $('editBar'); b.hidden = !editMode; $('scroller').classList.toggle('placing', editMode && !!curItem);
+  if (!editMode) return;
+  b.innerHTML = curItem ? `📍 คลิกบนแปลนเพื่อวางหมุดของ: <b>${esc(curItem.name)}</b>${curAsset ? ' · เลข <b>' + esc(curAsset) + '</b>' : ''} (วางได้หลายหมุด · ลากหมุดเพื่อย้าย)` : 'โหมดปักหมุด: เลือกรายการครุภัณฑ์ในแท็บ “ครุภัณฑ์” ก่อน แล้วคลิกบนแปลน';
+}
+
+/* ---------------- pointer interaction on the plan ---------------- */
+let drag = null;
+$('scroller').addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  const pinEl = e.target.closest('.pin');
+  if (pinEl && editMode) { drag = { type: 'pin', id: pinEl.dataset.pin, moved: false, sx: e.clientX, sy: e.clientY }; e.preventDefault(); return; }
+  drag = { type: 'pan', sx: e.clientX, sy: e.clientY, l: e.currentTarget.scrollLeft, t: e.currentTarget.scrollTop, moved: false };
+});
+window.addEventListener('mousemove', e => {
+  if (!drag) return;
+  if (Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) > 4) drag.moved = true;
+  if (!drag.moved) return;
+  if (drag.type === 'pan') { const sc = $('scroller'); sc.classList.add('dragging'); sc.scrollLeft = drag.l - (e.clientX - drag.sx); sc.scrollTop = drag.t - (e.clientY - drag.sy); }
+  else { const r = $('stage').getBoundingClientRect(); const p = state.pins.find(p => p.id === drag.id); p.x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); p.y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)); renderPins(); }
+});
+window.addEventListener('mouseup', e => {
+  if (!drag) return; const d = drag; drag = null; $('scroller').classList.remove('dragging');
+  if (d.type === 'pin') { if (d.moved) save(); else pinClicked(d.id); return; }
+  if (d.moved) return;
+  const pinEl = e.target.closest && e.target.closest('.pin'); if (pinEl) { pinClicked(pinEl.dataset.pin); return; }
+  const cl = e.target.closest && e.target.closest('.cluster');
+  if (cl) { const [cx, cy] = cl.dataset.cluster.split(',').map(Number), sc = $('scroller'), st = $('stage'), r = sc.getBoundingClientRect();
+    setZoom(zoom * 2, { x: st.getBoundingClientRect().left - r.left + cx * st.offsetWidth, y: st.getBoundingClientRect().top - r.top + cy * st.offsetHeight }); return; }
+  if (editMode && curItem && curPlan && $('stage').contains(e.target)) {
+    const r = $('stage').getBoundingClientRect();
+    const p = { id: uid(), plan: curPlan.id, page: pageNo, x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height, item: curItem.id };
+    if (curAsset) { p.asset = curAsset; p.label = curAsset; curAsset = null; }
+    state.pins.push(p); selPin = p.id; save(); renderPins(); renderDetail(); renderList(); renderEditBar(); toast('วางหมุดแล้ว');
+  }
+});
+$('scroller').addEventListener('wheel', e => {
+  if (!pdfDoc) return;
+  if (e.ctrlKey || e.shiftKey || true) { e.preventDefault(); const r = $('scroller').getBoundingClientRect(); setZoom(zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), { x: e.clientX - r.left, y: e.clientY - r.top }); }
+}, { passive: false });
+function pinClicked(id) {
+  const p = state.pins.find(p => p.id === id); if (!p) return; selPin = id; renderPins();
+  const it = itemById[p.item]; if (it) { curItem = it; renderDetail(); renderList(); renderEditBar(); if (innerWidth <= 1000) $('right').classList.add('open'); }
+}
+
+/* ---------------- events ---------------- */
+$('list').addEventListener('click', e => {
+  const t = e.target;
+  if (t.id === 'moreBtn') { shown += 150; renderList(); return; }
+  const lk = t.closest('[data-link]'); if (lk) { e.stopPropagation(); const l = state.photoLinks[curItem.id] = state.photoLinks[curItem.id] || []; if (!l.includes(lk.dataset.link)) { l.push(lk.dataset.link); save(); renderDetail(); toast('ผูกรูปกับรายการแล้ว'); } return; }
+  const pc = t.closest('[data-pcat],[data-pfloor]');
+  if (pc) { setTab('items'); if (pc.dataset.pcat) { $('catSel').value = pc.dataset.pcat; refreshFloors(); $('floorSel').value = ''; } else { $('floorSel').value = pc.dataset.pfloor; } renderList(); return; }
+  const pl = t.closest('[data-plan]'); if (pl) { loadPlan(planById[pl.dataset.plan]); document.body.classList.remove('x'); $('left').classList.remove('open'); return; }
+  const it = t.closest('[data-item]'); if (it) { selectItem(itemById[it.dataset.item], { focusPin: true }); return; }
+  const ph = t.closest('[data-photo]'); if (ph) openLightbox(photoById[ph.dataset.photo]);
+});
+$('detail').addEventListener('click', e => {
+  const t = e.target;
+  const rp = t.closest('[data-relplan]'); if (rp) { loadPlan(planById[rp.dataset.relplan]); if (innerWidth <= 1000) $('right').classList.remove('open'); return; }
+  if (t.id === 'btnPlace') { $('editMode').checked = true; setEdit(true); if (!curPlan) toast('เลือกแปลนทางซ้ายก่อน แล้วคลิกบนแปลน'); return; }
+  if (t.dataset.placeasset) { curAsset = t.dataset.placeasset; $('editMode').checked = true; setEdit(true); renderDetail(); toast(curPlan ? 'คลิกบนแปลนเพื่อวางหมุดของ ' + curAsset : 'เลือกแปลนทางซ้ายก่อน แล้วคลิกบนแปลน'); return; }
+  if (t.dataset.delpin) { e.stopPropagation(); if (confirm('ลบหมุดนี้?')) { state.pins = state.pins.filter(p => p.id !== t.dataset.delpin); save(); renderPins(); renderDetail(); renderList(); } return; }
+  if (t.dataset.unlink) { const l = state.photoLinks[curItem.id]; state.photoLinks[curItem.id] = l.filter(i => i !== t.dataset.unlink); save(); renderDetail(); return; }
+  if (t.dataset.lb) { openLightbox(photoById[t.dataset.lb]); return; }
+  const g = t.closest('[data-gopin]'); if (g) { const p = state.pins.find(p => p.id === g.dataset.gopin); if (!p) return; selPin = p.id; const pl = planById[p.plan]; if (curPlan && curPlan.id === pl.id && pageNo === p.page) { renderPins(); scrollToPin(p); } else loadPlan(pl, p.page, p); }
+});
+function openLightbox(p) { $('lbImg').src = aUrl('photos', p.file); $('lbImg').alt = p.name; $('lightbox').hidden = false; }
+$('lightbox').addEventListener('click', () => $('lightbox').hidden = true);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') $('lightbox').hidden = true; if ((e.key === 'Delete') && editMode && selPin && !/INPUT|SELECT/.test(document.activeElement.tagName)) { state.pins = state.pins.filter(p => p.id !== selPin); selPin = null; save(); renderPins(); renderDetail(); renderList(); } });
+function setTab(t) { tab = t; document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === t)); $('catSel').parentElement.hidden = t === 'progress'; shown = 150; renderList(); }
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
+$('pinColor').onchange = renderPins;
+$('btnPlanItems').onclick = () => curPlan && showItemsOfPlan(curPlan);
+$('btnLeft').onclick = () => { $('right').classList.remove('open'); $('left').classList.toggle('open'); };
+$('btnRight').onclick = () => { $('left').classList.remove('open'); $('right').classList.toggle('open'); };
+$('catSel').onchange = () => { refreshFloors(); shown = 150; renderList(); };
+$('floorSel').onchange = () => { shown = 150; renderList(); };
+$('onlyUnpinned').onchange = () => { shown = 150; renderList(); };
+let qT; $('q').oninput = () => { clearTimeout(qT); qT = setTimeout(() => { shown = 150; renderList(); }, 200); };
+function setEdit(v) { editMode = v; renderEditBar(); }
+$('editMode').onchange = e => setEdit(e.target.checked);
+$('showLabels').onchange = renderPins;
+$('zIn').onclick = () => setZoom(zoom * 1.25); $('zOut').onclick = () => setZoom(zoom / 1.25); $('zFit').onclick = () => pdfDoc && renderPage(true);
+$('pgPrev').onclick = () => { if (pageNo > 1) { pageNo--; renderPage(true); } }; $('pgNext').onclick = () => { if (pdfDoc && pageNo < pdfDoc.numPages) { pageNo++; renderPage(true); } };
+window.addEventListener('resize', () => { clearTimeout(window._rz); window._rz = setTimeout(() => pdfDoc && renderPage(true), 300); });
+$('btnExport').onclick = () => {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 1)], { type: 'application/json' }));
+  a.download = 'equipment-pins-' + new Date().toISOString().slice(0, 10) + '.json'; a.click();
+};
+$('btnImport').onclick = () => $('fileImport').click();
+$('fileImport').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const s = JSON.parse(await f.text()); if (!Array.isArray(s.pins)) throw 0;
+    if (!confirm(`นำเข้า ${s.pins.length} หมุด? (รวมกับข้อมูลเดิม โดยหมุดที่ id ซ้ำจะถูกแทนที่)`)) return;
+    const m = new Map(state.pins.map(p => [p.id, p])); s.pins.forEach(p => m.set(p.id, p)); state.pins = [...m.values()];
+    Object.entries(s.photoLinks || {}).forEach(([k, v]) => state.photoLinks[k] = [...new Set([...(state.photoLinks[k] || []), ...v])]);
+    save(); renderPins(); renderList(); renderDetail(); toast('นำเข้าแล้ว');
+  } catch { toast('ไฟล์ไม่ถูกต้อง'); }
+  e.target.value = '';
+};
+
+/* ---------------- boot ---------------- */
+(async function boot() {
+  try {
+    CAT = await (await fetch('data/catalog.json')).json();
+  } catch { $('msg').textContent = 'ไม่พบ data/catalog.json — รัน tools/ingest.ps1 ก่อน'; return; }
+  CAT.items.forEach(i => itemById[i.id] = i); CAT.photos.forEach(p => photoById[p.id] = p); CAT.plans.forEach(p => planById[p.id] = p);
+  try {
+    const A = await (await fetch('data/assets.json')).json();
+    A.assets.forEach(a => { (assetsByItem[a.i] = assetsByItem[a.i] || []).push(a); assetByCode[a.c] = a; });
+  } catch { /* assets.json is optional */ }
+  await loadState();
+  const counts = {}; CAT.items.forEach(i => counts[i.cat] = (counts[i.cat] || 0) + 1);
+  $('catSel').innerHTML = '<option value="">ทุกหมวดงาน</option>' + CAT.categories.map(c => `<option value="${c.id}">${c.id} · ${esc(c.name)}${counts[c.id] ? ' (' + counts[c.id] + ')' : ''}</option>`).join('');
+  refreshFloors(); renderList();
+})();

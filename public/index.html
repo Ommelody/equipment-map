@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>แผนผังตำแหน่งครุภัณฑ์</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>แผนผังตำแหน่งครุภัณฑ์ <small>ศูนย์การแพทย์ธรรมศาสตร์</small></h1>
+  <button id="btnLeft" class="ghost mob">☰ รายการ</button><button id="btnRight" class="ghost mob">ℹ︎ รายละเอียด</button>
+  <div class="spacer"></div>
+  <span id="syncState" class="sync" title="สถานะการบันทึก"></span>
+  <label class="switch"><input type="checkbox" id="editMode"><span>โหมดปักหมุด</span></label>
+  <button id="btnExport" class="ghost">ส่งออก</button>
+  <button id="btnImport" class="ghost">นำเข้า</button>
+  <input type="file" id="fileImport" accept="application/json" hidden>
+</header>
+
+<main>
+  <aside id="left">
+    <div class="tabs"><button data-tab="plans" class="on">แปลน</button><button data-tab="items">ครุภัณฑ์</button><button data-tab="photos">รูปภาพ</button><button data-tab="progress">ความคืบหน้า</button></div>
+    <div class="filters">
+      <select id="catSel"></select>
+      <input id="q" type="search" placeholder="ค้นหา ชื่อ / ยี่ห้อ / รุ่น / สถานที่">
+      <select id="floorSel" hidden></select>
+      <label class="chk" id="pinFilterWrap" hidden><input type="checkbox" id="onlyUnpinned"> เฉพาะที่ยังไม่ปักหมุด</label>
+    </div>
+    <div id="list"></div>
+  </aside>
+
+  <section id="viewer">
+    <div class="toolbar">
+      <b id="planTitle">เลือกแปลนทางซ้าย</b>
+      <button id="btnPlanItems" class="ghost" hidden>ดูครุภัณฑ์ของแปลนนี้</button>
+      <div class="spacer"></div>
+      <span id="pageCtl" hidden><button id="pgPrev" class="ghost">‹</button> หน้า <span id="pgNum">1</span>/<span id="pgTot">1</span> <button id="pgNext" class="ghost">›</button></span>
+      <button id="zOut" class="ghost">−</button><span id="zLbl">100%</span><button id="zIn" class="ghost">+</button><button id="zFit" class="ghost">พอดีจอ</button>
+      <select id="pinColor" style="width:auto" title="สีหมุด"><option value="cat">สีตามหมวด</option><option value="status">สีตามสถานะจับคู่</option></select>
+      <label class="chk"><input type="checkbox" id="showLabels" checked> ชื่อหมุด</label>
+    </div>
+    <div id="editBar" hidden></div>
+    <div id="scroller"><div id="stage"><canvas id="cv"></canvas><div id="pins"></div></div><div id="msg">เลือกแปลนจากรายการเพื่อเริ่มดู</div></div>
+  </section>
+
+  <aside id="right">
+    <div id="detail"><p class="muted">คลิกหมุดบนแปลน หรือเลือกรายการครุภัณฑ์ เพื่อดูรายละเอียดและรูปภาพ</p></div>
+  </aside>
+</main>
+
+<div id="lightbox" hidden><img id="lbImg" alt=""><button id="lbClose">✕</button></div>
+<div id="toast" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

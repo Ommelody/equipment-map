@@ -1,0 +1,8 @@
+assets-upload/
+design-data/
+dev-state.json
+asset-match.csv
+*.zip
+.claude/
+node_modules/
+.wrangler/
