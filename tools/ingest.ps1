@@ -213,6 +213,9 @@ foreach ($f in $pdfs) {
   $Source = $f.Src.Root
   $pk = "$($f.Name)|$($f.Length)"; if ($seenPlan.ContainsKey($pk)) { continue }; $seenPlan[$pk] = 1
   $top = Cat-Of $f.FullName; $catId = if ($f.Src.Cat) { $f.Src.Cat } else { ($top -split '-')[0] }
+  # identical file content already registered in the same category (different file name) -> skip the duplicate
+  $hk = "$catId|" + (Get-FileHash -LiteralPath $f.FullName -Algorithm MD5).Hash
+  if ($seenPlan.ContainsKey($hk)) { Write-Host ("[dup  ] {0}  (same content as {1})" -f $f.Name, $seenPlan[$hk]); continue }; $seenPlan[$hk] = $f.Name
   if (-not $cats.Contains($catId)) { $cats[$catId] = $(if ($f.Src.Name) { $f.Src.Name } else { ($top -replace '^\d+-', '') }) }
   $planN++; $id = "pl$planN"; $rel = $f.FullName.Substring($Source.Length).TrimStart('\')
   if (-not $SkipPlanCopy) { Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $planDir "$id.pdf") -Force }
