@@ -2,6 +2,16 @@
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#12161b;--panel:#1b2128;--line:#2b343e;--ink:#e6ebf0;--muted:#8d99a6;--brand:#3fa7d6;--brand-d:#7cc4e6}}
 :root[data-theme=dark]{--bg:#12161b;--panel:#1b2128;--line:#2b343e;--ink:#e6ebf0;--muted:#8d99a6;--brand:#3fa7d6;--brand-d:#7cc4e6}
 :root[data-theme=dark] #stage canvas{filter:brightness(.85)}
+body.reg #viewer{display:none}body.reg #registry{display:flex}
+#registry{display:none;flex-direction:column;min-width:0;min-height:0}
+#regFilters{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;background:var(--panel);border-bottom:1px solid var(--line)}
+#regFilters input{flex:2 1 260px;width:auto}#regFilters select{flex:1 1 140px;width:auto}
+#regWrap{flex:1;overflow:auto}
+#regTable{border-collapse:collapse;width:100%;font-size:12.5px}
+#regTable th{position:sticky;top:0;background:var(--panel);text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);white-space:nowrap;z-index:1}
+#regTable td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+#regTable tbody tr{cursor:pointer}#regTable tbody tr:hover{background:var(--bg)}#regTable tbody tr.sel{background:color-mix(in srgb,var(--brand) 14%,transparent)}
+#regTable td.c{white-space:nowrap;font-weight:500}
 body.gal #viewer{display:none}body.gal #gallery{display:flex}
 #gallery{display:none;flex-direction:column;min-width:0;min-height:0}
 #galChips{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;background:var(--panel);border-bottom:1px solid var(--line)}

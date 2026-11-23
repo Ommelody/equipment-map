@@ -148,11 +148,69 @@ function renderList() {
     }).join('') + (arr.length > shown ? `<div class="more"><button class="ghost" id="moreBtn">แสดงเพิ่ม</button></div>` : '');
   } else if (tab === 'progress') {
     el.innerHTML = renderProgress();
+  } else if (tab === 'registry') {
+    const all = Object.values(assetByCode), pinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset));
+    el.innerHTML = `<div class="grp">ทะเบียนครุภัณฑ์</div><div class="prog"><div class="big">${all.length.toLocaleString()}</div><div class="muted">รายการในทะเบียน</div>
+      <div>จับคู่กับเอกสารแล้ว ${all.filter(a => a.i).length.toLocaleString()} · ยังไม่จับคู่ ${all.filter(a => !a.i).length.toLocaleString()}</div><div>ปักหมุดแล้ว ${pinned.size.toLocaleString()}</div>
+      <p class="muted">ค้นหาและกรองได้ในตารางทางขวา คลิกแถวเพื่อดูรายละเอียด รายการในเอกสาร และตำแหน่งหมุด</p></div>`;
+    renderRegistry();
   } else {
     el.innerHTML = `<div class="grp">แกลเลอรีรูปภาพ</div><p class="muted" style="padding:10px">เลือกหมวด/ชั้น/คำค้นด้านบน ผลลัพธ์แสดงเป็นแกลเลอรีทางขวา คลิกรูปเพื่อดูภาพใหญ่ ข้อมูลรายการ และไปที่หมุดบนแปลน</p>`;
     renderGallery();
   }
-  document.body.classList.toggle('gal', tab === 'photos');
+  document.body.classList.toggle('gal', tab === 'photos'); document.body.classList.toggle('reg', tab === 'registry');
+}
+
+/* ---------------- asset register view ---------------- */
+let regShown = 100, regSel = null, regInit = false;
+function regFiltered() {
+  const q = $('regQ').value.trim().toLowerCase(), fl = $('regFloor').value, st = $('regStatus').value, dp = $('regDept').value, mt = $('regMatch').value;
+  const pinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset));
+  return Object.values(assetByCode).filter(a => {
+    if (fl && (a.f || '') !== fl) return false; if (st && (a.st || '') !== st) return false; if (dp && (a.d || '') !== dp) return false;
+    if (mt === 'm' && !a.i) return false; if (mt === 'u' && a.i) return false; if (mt === 'p' && !pinned.has(a.c)) return false; if (mt === 'np' && pinned.has(a.c)) return false;
+    if (q && !`${a.c} ${a.n} ${a.b || ''} ${a.m || ''} ${a.s || ''} ${a.rm || ''} ${a.loc || ''} ${a.d || ''}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+function regInitFilters() {
+  const all = Object.values(assetByCode), uniq = k => [...new Set(all.map(a => a[k] || ''))].filter(Boolean).sort((a, b) => (+(a.match(/\d+/) || [99])[0]) - (+(b.match(/\d+/) || [99])[0]) || a.localeCompare(b, 'th'));
+  const fill = (id, label, arr) => $(id).innerHTML = `<option value="">${label}</option>` + arr.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  fill('regFloor', 'ทุกชั้น', uniq('f')); fill('regStatus', 'ทุกสถานะ', uniq('st')); fill('regDept', 'ทุกแผนก', uniq('d'));
+  ['regFloor', 'regStatus', 'regDept', 'regMatch'].forEach(id => $(id).onchange = () => { regShown = 100; renderRegistry(); });
+  let t; $('regQ').oninput = () => { clearTimeout(t); t = setTimeout(() => { regShown = 100; renderRegistry(); }, 250); };
+  $('regCsv').onclick = () => {
+    const rows = regFiltered(), pinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset)), q = s => '"' + String(s ?? '').replace(/"/g, '""') + '"';
+    const head = ['เลขครุภัณฑ์', 'ชื่อ', 'ยี่ห้อ', 'รุ่น', 'Serial', 'ชั้น', 'ห้อง', 'แผนก', 'ที่ตั้ง', 'สถานะ', 'รายการในเอกสาร', 'ผลจับคู่', 'ปักหมุด'];
+    const body = rows.map(a => [a.c, a.n, a.b, a.m, a.s, a.f, a.rm, a.d, a.loc, a.st, a.i ? (itemById[a.i] || {}).name : '', a.i ? a.how : 'ไม่พบในเอกสาร', pinned.has(a.c) ? 'ปักแล้ว' : ''].map(q).join(','));
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + [head.map(q).join(','), ...body].join('\r\n')], { type: 'text/csv;charset=utf-8' }));
+    a.download = 'ทะเบียนครุภัณฑ์-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click();
+  };
+  $('regWrap').addEventListener('click', e => {
+    if (e.target.id === 'regMore') { regShown += 200; renderRegistry(); return; }
+    const tr = e.target.closest('[data-reg]'); if (tr) { regSel = tr.dataset.reg; renderRegistry(); renderAssetDetail(assetByCode[regSel]); if (innerWidth <= 1000) $('right').classList.add('open'); }
+  });
+  regInit = true;
+}
+function renderRegistry() {
+  if (!Object.keys(assetByCode).length) { $('regTable').innerHTML = '<tr><td class="muted" style="padding:20px">ยังไม่มีข้อมูลทะเบียน (data/assets.json)</td></tr>'; return; }
+  if (!regInit) regInitFilters();
+  const arr = regFiltered(), pinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset));
+  $('regCount').textContent = ' ' + arr.length.toLocaleString() + ' / ' + Object.keys(assetByCode).length.toLocaleString() + ' รายการ';
+  $('regTable').innerHTML = '<thead><tr><th>เลขครุภัณฑ์</th><th>ชื่อ</th><th>ยี่ห้อ / รุ่น</th><th>Serial</th><th>ชั้น</th><th>ห้อง / ที่ตั้ง</th><th>สถานะ</th><th>จับคู่</th><th>หมุด</th></tr></thead><tbody>' +
+    arr.slice(0, regShown).map(a => `<tr data-reg="${esc(a.c)}" class="${regSel === a.c ? 'sel' : ''}"><td class="c">${esc(a.c)}</td><td>${esc(a.n)}</td><td>${esc([a.b, a.m].filter(Boolean).join(' / '))}</td><td>${esc(a.s || '')}</td><td>${esc(a.f || '')}</td><td>${esc(a.rm || a.loc || '')}</td><td>${esc(a.st || '')}</td>
+      <td>${a.i ? `<span class="badge ${a.how === 'exact' || a.how === 'manual' ? 'ok' : ''}">${a.how === 'manual' ? 'ด้วยมือ' : a.how === 'exact' ? 'ตรง' : (a.how || '').includes('excess') ? 'เกินจำนวน' : 'ใกล้เคียง'}</span>` : '<span class="badge">ไม่พบในเอกสาร</span>'}</td><td>${pinned.has(a.c) ? '📍' : ''}</td></tr>`).join('') + '</tbody>' +
+    (arr.length > regShown ? `<tfoot><tr><td colspan="9" style="text-align:center;padding:10px"><button class="ghost" id="regMore">แสดงเพิ่ม (เหลือ ${(arr.length - regShown).toLocaleString()})</button></td></tr></tfoot>` : '');
+}
+function renderAssetDetail(a) {
+  if (!a) return; const it = a.i && itemById[a.i], pins = state.pins.filter(p => p.asset === a.c);
+  const row = (k, v) => v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : '';
+  $('detail').innerHTML = `<h2>${esc(a.n)}</h2><span class="badge">${esc(a.c)}</span>${a.st ? `<span class="badge ok">${esc(a.st)}</span>` : ''}
+    <dl>${row('ยี่ห้อ', a.b)}${row('รุ่น', a.m)}${row('Serial', a.s)}${row('ชั้น', a.f)}${row('ห้อง', a.rm)}${row('แผนก', a.d)}${row('ที่ตั้งที่วาง', a.loc)}${row('ประเภทงาน', a.wt)}${row('เลขเครื่องมือแพทย์', a.md)}${row('สติกเกอร์', a.pr)}</dl>
+    <h3 style="font-size:14px;margin:12px 0 4px">การจับคู่กับเอกสาร</h3>
+    ${it ? `<div class="asset"><div><b>${esc(it.name)}</b> <span class="badge">${a.how === 'manual' ? 'จับคู่ด้วยมือ' : a.how === 'exact' ? 'ตรงทะเบียน' : (a.how || '').includes('excess') ? 'เกินจำนวนในเอกสาร' : 'ชื่อใกล้เคียง'}</span></div><div class="s muted">${esc(catName(it.cat))} · ${floorLbl(it.floor)}${it.location ? ' · ' + esc(it.location) : ''}</div><button class="ghost" id="regGoItem" data-item="${it.id}">ไปที่รายการนี้</button></div>` : '<p class="muted">ไม่พบรายการนี้ในเอกสาร</p>'}
+    <h3 style="font-size:14px;margin:12px 0 4px">หมุดบนแปลน (${pins.length})</h3>
+    ${pins.map(p => `<div class="row" style="padding:6px 0" data-gopin="${p.id}"><div class="t" style="font-weight:400">${esc((planById[p.plan] || {}).title || p.plan)} <span class="muted">· หน้า ${p.page}</span></div></div>`).join('') || '<p class="muted">ยังไม่ได้ปักหมุด</p>'}`;
 }
 
 /* ---------------- photo gallery ---------------- */
@@ -466,6 +524,7 @@ $('list').addEventListener('click', e => {
 $('detail').addEventListener('click', e => {
   const t = e.target;
   const rp = t.closest('[data-relplan]'); if (rp) { loadPlan(planById[rp.dataset.relplan]); if (innerWidth <= 1000) $('right').classList.remove('open'); return; }
+  if (t.id === 'regGoItem') { const it = itemById[t.dataset.item]; if (it) { setTab('items'); selectItem(it, { focusPin: true }); } return; }
   if (t.id === 'btnRematch') { openRematch(curItem); return; }
   if (t.id === 'btnPlace') { $('editMode').checked = true; setEdit(true); if (!curPlan) toast('เลือกแปลนทางซ้ายก่อน แล้วคลิกบนแปลน'); return; }
   if (t.dataset.placeasset) { curAsset = t.dataset.placeasset; $('editMode').checked = true; setEdit(true); renderDetail(); toast(curPlan ? 'คลิกบนแปลนเพื่อวางหมุดของ ' + curAsset : 'เลือกแปลนทางซ้ายก่อน แล้วคลิกบนแปลน'); return; }
@@ -475,7 +534,7 @@ $('detail').addEventListener('click', e => {
   const g = t.closest('[data-gopin]'); if (g) { const p = state.pins.find(p => p.id === g.dataset.gopin); if (!p) return; selPin = p.id; const pl = planById[p.plan]; if (curPlan && curPlan.id === pl.id && pageNo === p.page) { renderPins(); scrollToPin(p); } else loadPlan(pl, p.page, p); }
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') $('lightbox').hidden = true; if ((e.key === 'Delete') && editMode && selPin && !/INPUT|SELECT/.test(document.activeElement.tagName)) { state.pins = state.pins.filter(p => p.id !== selPin); selPin = null; save(); renderPins(); renderDetail(); renderList(); } });
-function setTab(t) { tab = t; document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === t)); $('catSel').parentElement.hidden = t === 'progress'; shown = 150; renderList(); }
+function setTab(t) { tab = t; document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === t)); $('catSel').parentElement.hidden = t === 'progress' || t === 'registry'; shown = 150; renderList(); }
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
 $('pinColor').onchange = renderPins;
 $('btnPlanItems').onclick = () => curPlan && showItemsOfPlan(curPlan);

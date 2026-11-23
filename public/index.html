@@ -24,7 +24,7 @@
 
 <main>
   <aside id="left">
-    <div class="tabs"><button data-tab="plans" class="on">แปลน</button><button data-tab="items">ครุภัณฑ์</button><button data-tab="photos">รูปภาพ</button><button data-tab="progress">ความคืบหน้า</button></div>
+    <div class="tabs"><button data-tab="plans" class="on">แปลน</button><button data-tab="items">ครุภัณฑ์</button><button data-tab="photos">รูปภาพ</button><button data-tab="registry">ทะเบียน</button><button data-tab="progress">ความคืบหน้า</button></div>
     <div class="filters">
       <select id="catSel"></select>
       <input id="q" type="search" placeholder="ค้นหา ชื่อ / ยี่ห้อ / รุ่น / สถานที่">
@@ -52,6 +52,16 @@
     <div class="toolbar"><b id="galTitle">รูปภาพครุภัณฑ์</b><div class="spacer"></div><span class="muted" id="galCount"></span></div>
     <div id="galChips"></div>
     <div id="galGrid"></div>
+  </section>
+
+  <section id="registry" hidden>
+    <div class="toolbar"><b>ทะเบียนครุภัณฑ์</b><span class="muted" id="regCount"></span><div class="spacer"></div><button id="regCsv" class="ghost">ดาวน์โหลด CSV (ที่กรองอยู่)</button></div>
+    <div id="regFilters">
+      <input id="regQ" type="search" placeholder="ค้นหา เลขครุภัณฑ์ / ชื่อ / ยี่ห้อ / รุ่น / Serial / ห้อง / แผนก">
+      <select id="regFloor"></select><select id="regStatus"></select><select id="regDept"></select>
+      <select id="regMatch"><option value="">จับคู่: ทั้งหมด</option><option value="m">จับคู่กับเอกสารแล้ว</option><option value="u">ยังไม่จับคู่</option><option value="p">ปักหมุดแล้ว</option><option value="np">ยังไม่ปักหมุด</option></select>
+    </div>
+    <div id="regWrap"><table id="regTable"></table></div>
   </section>
 
   <aside id="right">
