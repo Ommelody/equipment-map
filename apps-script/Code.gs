@@ -52,7 +52,9 @@ function readState_() {
   for (var j = 1; j < lv.length; j++) { if (!lv[j][0]) continue; (links[lv[j][0]] = links[lv[j][0]] || []).push(String(lv[j][1])); }
   var mo = {}, ov = sheet_('overrides', ['asset', 'item']).getDataRange().getValues();
   for (var k = 1; k < ov.length; k++) if (ov[k][0]) mo[String(ov[k][0])] = String(ov[k][1]);
-  return { pins: pins, photoLinks: links, matchOverrides: mo };
+  var rooms = {}, rv = sheet_('rooms', ['key', 'plan', 'page', 'x', 'y']).getDataRange().getValues();
+  for (var q = 1; q < rv.length; q++) if (rv[q][0]) rooms[String(rv[q][0])] = { plan: String(rv[q][1]), page: +rv[q][2], x: +rv[q][3], y: +rv[q][4] };
+  return { pins: pins, photoLinks: links, matchOverrides: mo, rooms: rooms };
 }
 
 function writeState_(st) {
@@ -68,6 +70,7 @@ function writeState_(st) {
   var mo = st.matchOverrides || {}, orows = Object.keys(mo).map(function (c) { return [c, mo[c]]; });
   var os = sheet_('overrides', ['asset', 'item']); os.getRange(2, 1, Math.max(os.getMaxRows() - 1, 1), 2).clearContent();
   if (orows.length) os.getRange(2, 1, orows.length, 2).setValues(orows);
+  writeRooms_(st);
 }
 
 /** Run once after uploading files to Drive (and again when files change): builds the name -> Drive id index. */
@@ -100,4 +103,11 @@ function readChunk_(id, n, size) {
   });
   if (r.getResponseCode() >= 300) throw new Error('drive ' + r.getResponseCode());
   return { total: total, data: Utilities.base64Encode(r.getContent()) };
+}
+
+/** Room anchors (state.rooms): called from writeState_. */
+function writeRooms_(st) {
+  var rm = st.rooms || {}, rows = Object.keys(rm).map(function (k) { return [k, rm[k].plan, rm[k].page, rm[k].x, rm[k].y]; });
+  var sh = sheet_('rooms', ['key', 'plan', 'page', 'x', 'y']); sh.getRange(2, 1, Math.max(sh.getMaxRows() - 1, 1), 5).clearContent();
+  if (rows.length) sh.getRange(2, 1, rows.length, 5).setValues(rows);
 }

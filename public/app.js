@@ -75,7 +75,7 @@ async function loadState() {
   setSync('○ บันทึกในเบราว์เซอร์นี้เท่านั้น', '');
 }
 function save() {
-  lsSave();
+  invalidatePins(); lsSave();
   if (!apiOK) return;
   setSync('… กำลังบันทึก', '');
   clearTimeout(saveTimer);
@@ -100,8 +100,39 @@ function toast(t) { const e = $('toast'); e.textContent = t; e.hidden = false; c
 
 /* ---------------- helpers ---------------- */
 const aUrl = (kind, file, big) => SHEET && FILES[kind] ? `https://drive.google.com/thumbnail?id=${FILES[kind][file] || ''}&sz=w${big ? 2000 : 600}` : `${CAT.assetBase}/${kind}/${file}`;
-const pinsOfItem = id => state.pins.filter(p => p.item === id);
-const pinsOfPlan = () => state.pins.filter(p => curPlan && p.plan === curPlan.id && p.page === pageNo);
+/* ---- room anchors -> auto-distributed pins (derived at runtime, only the anchors are stored in state.rooms) ---- */
+let roomsIdx = new Map();                 // "floor|room" -> { floor, room, assets[] }
+let _pinCache = null;
+const invalidatePins = () => { _pinCache = null; };
+const floorKey = f => /ใต้ดิน/.test(f || '') ? 'B' : /ดาดฟ้า/.test(f || '') ? 'R' : ((f || '').match(/\d+/) || [''])[0];
+const roomOf = a => { for (const c of [a.loc, a.rm, a.d]) if (c && !/^อาคาร/.test(c) && !/^สำหรับกระจายต้นทุน/.test(c)) return c; return ''; };
+function buildRoomIndex() {
+  roomsIdx = new Map();
+  Object.values(assetByCode).forEach(a => { const r = roomOf(a), f = floorKey(a.f); if (!r || !f) return; const k = f + '|' + r; if (!roomsIdx.has(k)) roomsIdx.set(k, { key: k, floor: f, room: r, assets: [] }); roomsIdx.get(k).assets.push(a); });
+}
+const planAspect = {};                    // plan:page -> height/width (learned when a page is rendered)
+function autoPinsList() {
+  const manual = new Set(state.pins.filter(p => p.asset).map(p => p.asset)), out = [];
+  for (const [key, an] of Object.entries(state.rooms || {})) {
+    const r = roomsIdx.get(key); if (!r || !planById[an.plan]) continue;
+    const asp = planAspect[an.plan + ':' + an.page] || 0.7, s = 0.0032;     // spacing as a fraction of plan width
+    r.assets.filter(a => !manual.has(a.c)).forEach((a, i) => {
+      const rad = s * Math.sqrt(i + 0.5), ang = i * 2.399963;
+      out.push({ id: 'a:' + a.c, plan: an.plan, page: an.page, x: Math.min(1, Math.max(0, an.x + rad * Math.cos(ang))), y: Math.min(1, Math.max(0, an.y + rad * Math.sin(ang) / asp)), item: a.i || '', asset: a.c, label: a.n, auto: true, room: key });
+    });
+  }
+  return out;
+}
+function pinCache() {
+  if (_pinCache) return _pinCache;
+  const auto = autoPinsList(), all = state.pins.concat(auto), byItem = new Map(), byId = new Map();
+  all.forEach(p => { byId.set(p.id, p); if (p.item) (byItem.get(p.item) || byItem.set(p.item, []).get(p.item)).push(p); });
+  return (_pinCache = { all, byItem, byId, auto });
+}
+const allPins = () => pinCache().all;
+const findPin = id => pinCache().byId.get(id);
+const pinsOfItem = id => pinCache().byItem.get(id) || [];
+const pinsOfPlan = () => allPins().filter(p => curPlan && p.plan === curPlan.id && p.page === pageNo);
 const itemPhotos = it => { const ids = new Set([...(it.photos || []), ...(state.photoLinks[it.id] || [])]); return [...ids].map(i => photoById[i]).filter(Boolean); };
 const floorLbl = f => !f ? '—' : /^\d+$/.test(f) ? 'ชั้น ' + f : (f === 'B' ? 'ชั้นใต้ดิน (B)' : f);
 const catName = id => (CAT.categories.find(c => c.id === id) || {}).name || id;
@@ -133,7 +164,7 @@ function renderList() {
     const rel = curItem ? new Set(relatedPlans(curItem).map(p => p.id)) : null;   // plans for the selected item float to the top
     if (rel) arr = [...arr.filter(p => rel.has(p.id)), ...arr.filter(p => !rel.has(p.id))];
     el.innerHTML = (rel ? `<div class="grp">แปลนที่เกี่ยวข้องกับ “${esc(curItem.name.slice(0, 40))}” อยู่บนสุด</div>` : `<div class="grp">${arr.length} แปลน${cat ? ' ในหมวด ' + esc(catName(cat)) : ''}</div>`) + arr.map(p => {
-      const n = state.pins.filter(x => x.plan === p.id).length;
+      const n = allPins().filter(x => x.plan === p.id).length;
       return `<div class="row ${curPlan && curPlan.id === p.id ? 'sel' : ''}" data-plan="${p.id}"><div class="t">${esc(p.title)}</div>
         <div class="s"><span class="badge">${esc(catName(p.cat))}</span>${p.floor ? `<span class="badge">${floorLbl(p.floor)}</span>` : ''}<span class="badge">${p.sizeMB} MB</span>${n ? `<span class="badge ok">${n} หมุด</span>` : ''}</div></div>`;
     }).join('') || '<div class="more muted">ไม่พบแปลน</div>';
@@ -149,7 +180,7 @@ function renderList() {
   } else if (tab === 'progress') {
     el.innerHTML = renderProgress();
   } else if (tab === 'registry') {
-    const all = Object.values(assetByCode), pinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset));
+    const all = Object.values(assetByCode), pinned = new Set(allPins().filter(p => p.asset).map(p => p.asset));
     el.innerHTML = `<div class="grp">ทะเบียนครุภัณฑ์</div><div class="prog"><div class="big">${all.length.toLocaleString()}</div><div class="muted">รายการในทะเบียน</div>
       <div>จับคู่กับเอกสารแล้ว ${all.filter(a => a.i).length.toLocaleString()} · ยังไม่จับคู่ ${all.filter(a => !a.i).length.toLocaleString()}</div><div>ปักหมุดแล้ว ${pinned.size.toLocaleString()}</div>
       <p class="muted">ค้นหาและกรองได้ในตารางทางขวา คลิกแถวเพื่อดูรายละเอียด รายการในเอกสาร และตำแหน่งหมุด</p></div>`;
@@ -165,7 +196,7 @@ function renderList() {
 let regPage = 1, regSize = 100, regSel = null, regInit = false;
 function regFiltered() {
   const q = $('regQ').value.trim().toLowerCase(), fl = $('regFloor').value, st = $('regStatus').value, dp = $('regDept').value, mt = $('regMatch').value;
-  const pinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset));
+  const pinned = new Set(allPins().filter(p => p.asset).map(p => p.asset));
   return Object.values(assetByCode).filter(a => {
     if (fl && (a.f || '') !== fl) return false; if (st && (a.st || '') !== st) return false; if (dp && (a.d || '') !== dp) return false;
     if (mt === 'm' && !a.i) return false; if (mt === 'u' && a.i) return false; if (mt === 'p' && !pinned.has(a.c)) return false; if (mt === 'np' && pinned.has(a.c)) return false;
@@ -180,7 +211,7 @@ function regInitFilters() {
   ['regFloor', 'regStatus', 'regDept', 'regMatch'].forEach(id => $(id).onchange = () => { regPage = 1; renderRegistry(); });
   let t; $('regQ').oninput = () => { clearTimeout(t); t = setTimeout(() => { regPage = 1; renderRegistry(); }, 250); };
   $('regCsv').onclick = () => {
-    const rows = regFiltered(), pinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset)), q = s => '"' + String(s ?? '').replace(/"/g, '""') + '"';
+    const rows = regFiltered(), pinned = new Set(allPins().filter(p => p.asset).map(p => p.asset)), q = s => '"' + String(s ?? '').replace(/"/g, '""') + '"';
     const head = ['เลขครุภัณฑ์', 'ชื่อ', 'ยี่ห้อ', 'รุ่น', 'Serial', 'ชั้น', 'ห้อง', 'แผนก', 'ที่ตั้ง', 'สถานะ', 'รายการในเอกสาร', 'ผลจับคู่', 'ปักหมุด'];
     const body = rows.map(a => [a.c, a.n, a.b, a.m, a.s, a.f, a.rm, a.d, a.loc, a.st, a.i ? (itemById[a.i] || {}).name : '', a.i ? a.how : 'ไม่พบในเอกสาร', pinned.has(a.c) ? 'ปักแล้ว' : ''].map(q).join(','));
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + [head.map(q).join(','), ...body].join('\r\n')], { type: 'text/csv;charset=utf-8' }));
@@ -194,7 +225,7 @@ function regInitFilters() {
 function renderRegistry() {
   if (!Object.keys(assetByCode).length) { $('regTable').innerHTML = '<tr><td class="muted" style="padding:20px">ยังไม่มีข้อมูลทะเบียน (data/assets.json)</td></tr>'; return; }
   if (!regInit) regInitFilters();
-  const arr = regFiltered(), pinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset));
+  const arr = regFiltered(), pinned = new Set(allPins().filter(p => p.asset).map(p => p.asset));
   $('regCount').textContent = ' ' + arr.length.toLocaleString() + ' / ' + Object.keys(assetByCode).length.toLocaleString() + ' รายการ';
   $('regTable').innerHTML = '<thead><tr><th>เลขครุภัณฑ์</th><th>ชื่อ</th><th>ยี่ห้อ / รุ่น</th><th>Serial</th><th>ชั้น</th><th>ห้อง / ที่ตั้ง</th><th>สถานะ</th><th>จับคู่</th><th>หมุด</th></tr></thead><tbody>' +
     arr.slice((regPage - 1) * regSize, regPage * regSize).map(a => `<tr data-reg="${esc(a.c)}" class="${regSel === a.c ? 'sel' : ''}"><td class="c">${esc(a.c)}</td><td>${esc(a.n)}</td><td>${esc([a.b, a.m].filter(Boolean).join(' / '))}</td><td>${esc(a.s || '')}</td><td>${esc(a.f || '')}</td><td>${esc(a.rm || a.loc || '')}</td><td>${esc(a.st || '')}</td>
@@ -221,7 +252,7 @@ $('regPager').addEventListener('change', e => {
   if (e.target.id === 'regPgIn') { regPage = Math.max(1, +e.target.value || 1); renderRegistry(); }
 });
 function renderAssetDetail(a) {
-  if (!a) return; const it = a.i && itemById[a.i], pins = state.pins.filter(p => p.asset === a.c);
+  if (!a) return; const it = a.i && itemById[a.i], pins = allPins().filter(p => p.asset === a.c);
   const row = (k, v) => v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : '';
   $('detail').innerHTML = `<h2>${esc(a.n)}</h2><span class="badge">${esc(a.c)}</span>${a.st ? `<span class="badge ok">${esc(a.st)}</span>` : ''}
     <dl>${row('ยี่ห้อ', a.b)}${row('รุ่น', a.m)}${row('Serial', a.s)}${row('ชั้น', a.f)}${row('ห้อง', a.rm)}${row('แผนก', a.d)}${row('ที่ตั้งที่วาง', a.loc)}${row('ประเภทงาน', a.wt)}${row('เลขเครื่องมือแพทย์', a.md)}${row('สติกเกอร์', a.pr)}</dl>
@@ -292,12 +323,12 @@ function progRow(label, s, attr) {
   return `<div class="prow" ${attr}><div class="nm"><span>${esc(label)}</span><span class="muted">${s.done}/${s.total} · ${pct(s.done, s.total)}%</span></div><div class="bar"><i style="width:${pct(s.done, s.total)}%"></i></div></div>`;
 }
 function renderProgress() {
-  const all = progStats(CAT.items), assetsPinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset)).size;
+  const all = progStats(CAT.items), assetsPinned = new Set(allPins().filter(p => p.asset).map(p => p.asset)).size;
   const byCat = CAT.categories.map(c => progRow(c.name, progStats(CAT.items.filter(i => i.cat === c.id)), `data-pcat="${c.id}"`)).join('');
   const floors = [...new Set(CAT.items.map(i => i.floor || ''))].sort((a, b) => (+a || 99) - (+b || 99) || a.localeCompare(b));
   const byFloor = floors.map(f => progRow(f ? floorLbl(f) : '(ไม่ระบุชั้น)', progStats(CAT.items.filter(i => (i.floor || '') === f)), `data-pfloor="${esc(f)}"`)).join('');
   return `<div class="prog"><div><div class="big">${pct(all.done, all.total)}%</div><div class="muted">ปักหมุดครบจำนวน ${all.done.toLocaleString()} / ${all.total.toLocaleString()} รายการ</div><div class="bar"><i style="width:${pct(all.done, all.total)}%"></i></div></div>
-    <div class="muted">หมุดทั้งหมด ${state.pins.length.toLocaleString()} · รายการที่มีเลขครุภัณฑ์ ${all.withAsset.toLocaleString()} · เลขครุภัณฑ์ที่ปักแล้ว ${assetsPinned.toLocaleString()} / ${Object.keys(assetByCode).length.toLocaleString()}</div>
+    <div class="muted">หมุดทั้งหมด ${allPins().length.toLocaleString()} · รายการที่มีเลขครุภัณฑ์ ${all.withAsset.toLocaleString()} · เลขครุภัณฑ์ที่ปักแล้ว ${assetsPinned.toLocaleString()} / ${Object.keys(assetByCode).length.toLocaleString()}</div>
     <h3>ตามหมวดงาน (คลิกเพื่อดูรายการ)</h3>${byCat}<h3>ตามชั้น</h3>${byFloor}</div>`;
 }
 
@@ -359,7 +390,7 @@ function openRematch(it) {
 function renderAssets(it) {
   const as = assetsByItem[it.id] || [];
   if (!as.length) return '<h3 style="font-size:14px;margin:16px 0 4px">เลขครุภัณฑ์</h3><p class="muted">ไม่พบเลขครุภัณฑ์ที่ตรงกันในทะเบียน</p><button class="ghost" id="btnRematch">แก้การจับคู่</button>';
-  const pinned = new Set(state.pins.filter(p => p.item === it.id && p.asset).map(p => p.asset));
+  const pinned = new Set(allPins().filter(p => p.item === it.id && p.asset).map(p => p.asset));
   return `<h3 style="font-size:14px;margin:16px 0 4px">เลขครุภัณฑ์ (${as.length}) <span class="muted" style="font-weight:400;font-size:12px">· ปักแล้ว ${pinned.size}</span> <button class="ghost" id="btnRematch" style="padding:1px 8px;font-size:12px">แก้การจับคู่</button></h3>
     <div class="assets">${as.slice(0, 200).map(a => `<div class="asset ${curAsset === a.c ? 'sel' : ''}" data-asset="${esc(a.c)}">
       <div><b>${esc(a.c)}</b>${a.how !== 'exact' ? ` <span class="badge" title="ความมั่นใจ ${a.cf}">${a.how === 'manual' ? 'จับคู่ด้วยมือ' : a.how.includes('excess') ? 'เกินจำนวนในเอกสาร' : 'ชื่อใกล้เคียง'}</span>` : ''}</div>
@@ -426,8 +457,9 @@ async function renderPage(fit, focus) {
   const tok = ++renderTok; if (renderTask) { try { renderTask.cancel(); } catch { } renderTask = null; }
   const pg = await pdfDoc.getPage(pageNo); if (tok !== renderTok) return;
   const v1 = pg.getViewport({ scale: 1 }); baseW = v1.width; baseH = v1.height;
+  { const k = curPlan.id + ':' + pageNo, a = baseH / baseW; if (planAspect[k] !== a) { planAspect[k] = a; invalidatePins(); } }
   const sc = $('scroller'), cv = $('cv'), key = curPlan.id + ':' + pageNo + ':' + sc.clientWidth + 'x' + sc.clientHeight;
-  if (fit) { fitZoom = Math.min((sc.clientWidth - 40) / baseW, (sc.clientHeight - 40) / baseH); zoom = fitZoom; }
+  if (fit) { fitZoom = Math.max(0.03, Math.min((sc.clientWidth - 40) / baseW, (sc.clientHeight - 40) / baseH)); zoom = fitZoom; }
   const vp = pg.getViewport({ scale: zoom });
   const dpr = Math.min(window.devicePixelRatio || 1, 2), cap = 9000;
   const out = Math.min(dpr, cap / vp.width, cap / vp.height);
@@ -478,10 +510,15 @@ function renderPins() {
     }
     return g.map(p => {
       const it = itemById[p.item];
-      return `<div class="pin ${selPin === p.id ? 'sel' : ''}" data-pin="${p.id}" style="left:${p.x * 100}%;top:${p.y * 100}%;--pc:${pinColor(p)}"><span class="lbl">${esc(p.label || (it ? it.name : '?'))}</span><span class="dot"></span></div>`;
+      return `<div class="pin ${selPin === p.id ? 'sel' : ''} ${p.auto ? 'auto' : ''}" data-pin="${p.id}" style="left:${p.x * 100}%;top:${p.y * 100}%;--pc:${pinColor(p)}"><span class="lbl">${esc(p.label || (it ? it.name : '?'))}</span><span class="dot"></span></div>`;
     }).join('');
   }).join('');
   $('stage').parentElement.classList.toggle('hide-labels', !$('showLabels').checked);
+  if (curPlan) {                                              // room anchors of this page
+    $('pins').insertAdjacentHTML('beforeend', Object.entries(state.rooms || {}).filter(([k, a]) => a.plan === curPlan.id && a.page === pageNo).map(([k, a]) => {
+      const r = roomsIdx.get(k); return `<div class="anchor ${activeRoom === k && roomMode ? 'act' : ''}" data-anchor="${esc(k)}" style="left:${a.x * 100}%;top:${a.y * 100}%" title="${esc(r ? r.room : k)}"><span>${esc(r ? r.room.slice(0, 28) : k)}</span></div>`;
+    }).join(''));
+  }
 }
 function renderEditBar() {
   const b = $('editBar'); b.hidden = !editMode; $('scroller').classList.toggle('placing', editMode && !!curItem);
@@ -512,6 +549,10 @@ window.addEventListener('mouseup', e => {
   const cl = e.target.closest && e.target.closest('.cluster');
   if (cl) { const [cx, cy] = cl.dataset.cluster.split(',').map(Number), sc = $('scroller'), st = $('stage'), r = sc.getBoundingClientRect();
     setZoom(zoom * 2, { x: st.getBoundingClientRect().left - r.left + cx * st.offsetWidth, y: st.getBoundingClientRect().top - r.top + cy * st.offsetHeight }); return; }
+  if (roomMode && curPlan && $('stage').contains(e.target)) {
+    if (!activeRoom) { toast('เลือกห้องจากรายการทางขวาก่อน'); return; }
+    const r = $('stage').getBoundingClientRect(); placeRoom((e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height); return;
+  }
   if (editMode && curItem && curPlan && $('stage').contains(e.target)) {
     const r = $('stage').getBoundingClientRect();
     const p = { id: uid(), plan: curPlan.id, page: pageNo, x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height, item: curItem.id };
@@ -524,9 +565,48 @@ $('scroller').addEventListener('wheel', e => {
   if (e.ctrlKey || e.shiftKey || true) { e.preventDefault(); const r = $('scroller').getBoundingClientRect(); setZoom(zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), { x: e.clientX - r.left, y: e.clientY - r.top }); }
 }, { passive: false });
 function pinClicked(id) {
-  const p = state.pins.find(p => p.id === id); if (!p) return; selPin = id; renderPins();
-  const it = itemById[p.item]; if (it) { curItem = it; renderDetail(); renderList(); renderEditBar(); if (innerWidth <= 1000) $('right').classList.add('open'); }
+  const p = findPin(id); if (!p) return; selPin = id; renderPins();
+  const it = itemById[p.item];
+  if (it) { curItem = it; renderDetail(); renderList(); renderEditBar(); }
+  else if (p.asset && assetByCode[p.asset]) renderAssetDetail(assetByCode[p.asset]);
+  if ((it || p.asset) && innerWidth <= 1000) $('right').classList.add('open');
 }
+
+/* ---------------- room anchors UI ("กำหนดจุดห้อง") ---------------- */
+let roomMode = false, roomFloor = '', activeRoom = null;
+function defaultFloorForPlan() { const f = curPlan ? [...planFloors(curPlan)] : []; return f.length === 1 ? f[0] : ''; }
+function renderRoomPanel() {
+  const d = $('detail');
+  if (!curPlan) { d.innerHTML = '<h2>กำหนดจุดห้อง</h2><p class="muted">เลือกแปลนทางซ้ายก่อน</p>'; return; }
+  const floors = [...new Set([...roomsIdx.values()].map(r => r.floor))].sort((a, b) => (+a || 99) - (+b || 99) || a.localeCompare(b));
+  if (!roomFloor) roomFloor = defaultFloorForPlan() || floors[0] || '';
+  const rooms = [...roomsIdx.values()].filter(r => r.floor === roomFloor).sort((a, b) => b.assets.length - a.assets.length);
+  const total = rooms.reduce((s, r) => s + r.assets.length, 0), done = rooms.filter(r => state.rooms[r.key]);
+  d.innerHTML = `<h2>กำหนดจุดห้อง</h2><p class="muted" style="margin:0 0 8px">เลือกชั้นและห้อง แล้วคลิกบนแปลน (หน้า ${pageNo}) ตรงตำแหน่งห้อง ระบบจะแจกหมุดของครุภัณฑ์ทุกชิ้นในห้องนั้นรอบจุดที่คลิกให้ทันที</p>
+    <label class="muted">ชั้นของหน้านี้</label><select id="roomFloorSel">${floors.map(f => `<option value="${f}" ${f === roomFloor ? 'selected' : ''}>${f === 'B' ? 'ใต้ดิน' : f === 'R' ? 'ดาดฟ้า' : 'ชั้น ' + f}</option>`).join('')}</select>
+    <div class="muted" style="margin:8px 0">กำหนดแล้ว ${done.length}/${rooms.length} ห้อง · ครุภัณฑ์ ${total.toLocaleString()} ชิ้น</div>
+    ${rooms.map(r => { const an = state.rooms[r.key], pl = an && planById[an.plan]; return `<div class="row ${activeRoom === r.key ? 'sel' : ''}" data-room="${esc(r.key)}"><div class="t" style="font-weight:400">${esc(r.room)}</div>
+      <div class="s"><span class="badge">${r.assets.length} ชิ้น</span>${an ? `<span class="badge ok">✓ ${esc(pl ? pl.title.slice(0, 22) : an.plan)} หน้า ${an.page}</span> <button class="ghost" data-rmroom="${esc(r.key)}" style="padding:0 6px;font-size:11px">ลบจุด</button>` : '<span class="badge">ยังไม่กำหนด</span>'}</div></div>`; }).join('') || '<p class="muted">ไม่มีห้องในชั้นนี้</p>'}`;
+}
+function setRoomMode(on) {
+  roomMode = on; $('btnRooms').classList.toggle('on', on); $('scroller').classList.toggle('placing', on && !!activeRoom);
+  if (on) { editMode = false; $('editMode').checked = false; renderEditBar(); renderRoomPanel(); if (!activeRoom) toast('เลือกห้องจากรายการทางขวา แล้วคลิกบนแปลน'); } else { renderDetail(); }
+  const b = $('editBar'); if (on) { b.hidden = false; b.textContent = activeRoom ? '🏠 คลิกบนแปลนเพื่อวางจุดห้อง: ' + (roomsIdx.get(activeRoom) || {}).room : '🏠 โหมดกำหนดจุดห้อง: เลือกห้องทางขวาก่อน'; } else renderEditBar();
+  renderPins();
+}
+function placeRoom(x, y) {
+  const r = roomsIdx.get(activeRoom); if (!r) return;
+  state.rooms[activeRoom] = { plan: curPlan.id, page: pageNo, x, y }; save();
+  const order = [...roomsIdx.values()].filter(q => q.floor === roomFloor).sort((a, b) => b.assets.length - a.assets.length), next = order.find(q => !state.rooms[q.key]);
+  toast(`วางจุดห้อง ${r.room} แล้ว (${r.assets.length} หมุด)`); activeRoom = next ? next.key : null; renderRoomPanel(); setRoomMode(true); renderPins(); renderList();
+}
+$('btnRooms').onclick = () => setRoomMode(!roomMode);
+$('detail').addEventListener('change', e => { if (e.target.id === 'roomFloorSel') { roomFloor = e.target.value; activeRoom = null; renderRoomPanel(); setRoomMode(true); } });
+$('detail').addEventListener('click', e => {
+  if (!roomMode) return;
+  const del = e.target.closest('[data-rmroom]'); if (del) { e.stopPropagation(); delete state.rooms[del.dataset.rmroom]; save(); renderRoomPanel(); renderPins(); renderList(); return; }
+  const row = e.target.closest('[data-room]'); if (row) { activeRoom = row.dataset.room; renderRoomPanel(); setRoomMode(true); }
+}, true);
 
 /* ---------------- events ---------------- */
 $('list').addEventListener('click', e => {
@@ -549,7 +629,7 @@ $('detail').addEventListener('click', e => {
   if (t.dataset.delpin) { e.stopPropagation(); if (confirm('ลบหมุดนี้?')) { state.pins = state.pins.filter(p => p.id !== t.dataset.delpin); save(); renderPins(); renderDetail(); renderList(); } return; }
   if (t.dataset.unlink) { const l = state.photoLinks[curItem.id]; state.photoLinks[curItem.id] = l.filter(i => i !== t.dataset.unlink); save(); renderDetail(); return; }
   if (t.dataset.lb) { openLightbox(photoById[t.dataset.lb]); return; }
-  const g = t.closest('[data-gopin]'); if (g) { const p = state.pins.find(p => p.id === g.dataset.gopin); if (!p) return; selPin = p.id; const pl = planById[p.plan]; if (curPlan && curPlan.id === pl.id && pageNo === p.page) { renderPins(); scrollToPin(p); } else loadPlan(pl, p.page, p); }
+  const g = t.closest('[data-gopin]'); if (g) { const p = findPin(g.dataset.gopin); if (!p) return; selPin = p.id; const pl = planById[p.plan]; if (curPlan && curPlan.id === pl.id && pageNo === p.page) { renderPins(); scrollToPin(p); } else loadPlan(pl, p.page, p); }
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') $('lightbox').hidden = true; if ((e.key === 'Delete') && editMode && selPin && !/INPUT|SELECT/.test(document.activeElement.tagName)) { state.pins = state.pins.filter(p => p.id !== selPin); selPin = null; save(); renderPins(); renderDetail(); renderList(); } });
 function setTab(t) { tab = t; document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === t)); $('catSel').parentElement.hidden = t === 'progress' || t === 'registry'; shown = 150; renderList(); }
@@ -610,6 +690,7 @@ $('btnTheme').onclick = () => { const dark = $('btnTheme').textContent === '☀'
   } catch { /* assets.json is optional */ }
   await loadState();
   Object.entries(state.matchOverrides || {}).forEach(([c, i]) => applyOverride(c, i));
+  state.rooms = state.rooms || {}; buildRoomIndex(); invalidatePins();
   const counts = {}; CAT.items.forEach(i => counts[i.cat] = (counts[i.cat] || 0) + 1);
   $('catSel').innerHTML = '<option value="">ทุกหมวดงาน</option>' + CAT.categories.map(c => `<option value="${c.id}">${c.id} · ${esc(c.name)}${counts[c.id] ? ' (' + counts[c.id] + ')' : ''}</option>`).join('');
   refreshFloors(); renderList();

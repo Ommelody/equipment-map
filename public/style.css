@@ -127,3 +127,9 @@ body.resizing{user-select:none;cursor:col-resize}
 @media (max-width:1000px){.rz,.desk{display:none}}
 #regPager{display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;padding:7px 10px;background:var(--panel);border-top:1px solid var(--line)}
 #regPager button{padding:4px 10px}#regPager button[disabled]{opacity:.4;cursor:default}#regPager select,#regPager input{width:auto}#regPager input{width:64px;text-align:center}
+/* room anchors + auto pins */
+.anchor{position:absolute;transform:translate(-50%,-50%);width:16px;height:16px;border:2px solid #fff;background:#7c3aed;border-radius:3px;box-shadow:0 1px 4px rgba(0,0,0,.6);pointer-events:none;z-index:2}
+.anchor.act{background:#e5484d;width:20px;height:20px}
+.anchor span{position:absolute;left:50%;top:-6px;transform:translate(-50%,-100%);white-space:nowrap;background:#7c3aed;color:#fff;font-size:11px;padding:1px 6px;border-radius:4px}
+.pin.auto .dot{width:14px;height:14px;opacity:.9}.pin.auto.sel .dot{width:22px;height:22px;opacity:1}
+#btnRooms.on{background:var(--brand);color:#fff}
