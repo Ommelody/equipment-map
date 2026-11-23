@@ -162,7 +162,7 @@ function renderList() {
 }
 
 /* ---------------- asset register view ---------------- */
-let regShown = 100, regSel = null, regInit = false;
+let regPage = 1, regSize = 100, regSel = null, regInit = false;
 function regFiltered() {
   const q = $('regQ').value.trim().toLowerCase(), fl = $('regFloor').value, st = $('regStatus').value, dp = $('regDept').value, mt = $('regMatch').value;
   const pinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset));
@@ -177,8 +177,8 @@ function regInitFilters() {
   const all = Object.values(assetByCode), uniq = k => [...new Set(all.map(a => a[k] || ''))].filter(Boolean).sort((a, b) => (+(a.match(/\d+/) || [99])[0]) - (+(b.match(/\d+/) || [99])[0]) || a.localeCompare(b, 'th'));
   const fill = (id, label, arr) => $(id).innerHTML = `<option value="">${label}</option>` + arr.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
   fill('regFloor', 'ทุกชั้น', uniq('f')); fill('regStatus', 'ทุกสถานะ', uniq('st')); fill('regDept', 'ทุกแผนก', uniq('d'));
-  ['regFloor', 'regStatus', 'regDept', 'regMatch'].forEach(id => $(id).onchange = () => { regShown = 100; renderRegistry(); });
-  let t; $('regQ').oninput = () => { clearTimeout(t); t = setTimeout(() => { regShown = 100; renderRegistry(); }, 250); };
+  ['regFloor', 'regStatus', 'regDept', 'regMatch'].forEach(id => $(id).onchange = () => { regPage = 1; renderRegistry(); });
+  let t; $('regQ').oninput = () => { clearTimeout(t); t = setTimeout(() => { regPage = 1; renderRegistry(); }, 250); };
   $('regCsv').onclick = () => {
     const rows = regFiltered(), pinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset)), q = s => '"' + String(s ?? '').replace(/"/g, '""') + '"';
     const head = ['เลขครุภัณฑ์', 'ชื่อ', 'ยี่ห้อ', 'รุ่น', 'Serial', 'ชั้น', 'ห้อง', 'แผนก', 'ที่ตั้ง', 'สถานะ', 'รายการในเอกสาร', 'ผลจับคู่', 'ปักหมุด'];
@@ -187,7 +187,6 @@ function regInitFilters() {
     a.download = 'ทะเบียนครุภัณฑ์-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click();
   };
   $('regWrap').addEventListener('click', e => {
-    if (e.target.id === 'regMore') { regShown += 200; renderRegistry(); return; }
     const tr = e.target.closest('[data-reg]'); if (tr) { regSel = tr.dataset.reg; renderRegistry(); renderAssetDetail(assetByCode[regSel]); if (innerWidth <= 1000) $('right').classList.add('open'); }
   });
   regInit = true;
@@ -198,10 +197,29 @@ function renderRegistry() {
   const arr = regFiltered(), pinned = new Set(state.pins.filter(p => p.asset).map(p => p.asset));
   $('regCount').textContent = ' ' + arr.length.toLocaleString() + ' / ' + Object.keys(assetByCode).length.toLocaleString() + ' รายการ';
   $('regTable').innerHTML = '<thead><tr><th>เลขครุภัณฑ์</th><th>ชื่อ</th><th>ยี่ห้อ / รุ่น</th><th>Serial</th><th>ชั้น</th><th>ห้อง / ที่ตั้ง</th><th>สถานะ</th><th>จับคู่</th><th>หมุด</th></tr></thead><tbody>' +
-    arr.slice(0, regShown).map(a => `<tr data-reg="${esc(a.c)}" class="${regSel === a.c ? 'sel' : ''}"><td class="c">${esc(a.c)}</td><td>${esc(a.n)}</td><td>${esc([a.b, a.m].filter(Boolean).join(' / '))}</td><td>${esc(a.s || '')}</td><td>${esc(a.f || '')}</td><td>${esc(a.rm || a.loc || '')}</td><td>${esc(a.st || '')}</td>
+    arr.slice((regPage - 1) * regSize, regPage * regSize).map(a => `<tr data-reg="${esc(a.c)}" class="${regSel === a.c ? 'sel' : ''}"><td class="c">${esc(a.c)}</td><td>${esc(a.n)}</td><td>${esc([a.b, a.m].filter(Boolean).join(' / '))}</td><td>${esc(a.s || '')}</td><td>${esc(a.f || '')}</td><td>${esc(a.rm || a.loc || '')}</td><td>${esc(a.st || '')}</td>
       <td>${a.i ? `<span class="badge ${a.how === 'exact' || a.how === 'manual' ? 'ok' : ''}">${a.how === 'manual' ? 'ด้วยมือ' : a.how === 'exact' ? 'ตรง' : (a.how || '').includes('excess') ? 'เกินจำนวน' : 'ใกล้เคียง'}</span>` : '<span class="badge">ไม่พบในเอกสาร</span>'}</td><td>${pinned.has(a.c) ? '📍' : ''}</td></tr>`).join('') + '</tbody>' +
-    (arr.length > regShown ? `<tfoot><tr><td colspan="9" style="text-align:center;padding:10px"><button class="ghost" id="regMore">แสดงเพิ่ม (เหลือ ${(arr.length - regShown).toLocaleString()})</button></td></tr></tfoot>` : '');
+    '';
+  renderRegPager(arr.length);
 }
+function renderRegPager(total) {
+  const pages = Math.max(1, Math.ceil(total / regSize)); if (regPage > pages) { regPage = pages; return renderRegistry(); }
+  const from = total ? (regPage - 1) * regSize + 1 : 0, to = Math.min(total, regPage * regSize);
+  $('regPager').innerHTML = `<button class="ghost" data-pg="first" ${regPage <= 1 ? 'disabled' : ''}>« แรก</button><button class="ghost" data-pg="prev" ${regPage <= 1 ? 'disabled' : ''}>‹ ก่อนหน้า</button>
+    <span>หน้า <input id="regPgIn" type="number" min="1" max="${pages}" value="${regPage}"> / ${pages.toLocaleString()}</span>
+    <button class="ghost" data-pg="next" ${regPage >= pages ? 'disabled' : ''}>ถัดไป ›</button><button class="ghost" data-pg="last" ${regPage >= pages ? 'disabled' : ''}>สุดท้าย »</button>
+    <span class="muted">แสดง ${from.toLocaleString()}–${to.toLocaleString()} จาก ${total.toLocaleString()}</span>
+    <select id="regSizeSel">${[50, 100, 200, 500].map(n => `<option value="${n}" ${n === regSize ? 'selected' : ''}>${n} แถว/หน้า</option>`).join('')}</select>`;
+  $('regWrap').scrollTop = 0;
+}
+$('regPager').addEventListener('click', e => {
+  const b = e.target.closest('[data-pg]'); if (!b || b.disabled) return; const pages = Math.max(1, Math.ceil(regFiltered().length / regSize));
+  regPage = b.dataset.pg === 'first' ? 1 : b.dataset.pg === 'prev' ? Math.max(1, regPage - 1) : b.dataset.pg === 'next' ? Math.min(pages, regPage + 1) : pages; renderRegistry();
+});
+$('regPager').addEventListener('change', e => {
+  if (e.target.id === 'regSizeSel') { regSize = +e.target.value; regPage = 1; renderRegistry(); }
+  if (e.target.id === 'regPgIn') { regPage = Math.max(1, +e.target.value || 1); renderRegistry(); }
+});
 function renderAssetDetail(a) {
   if (!a) return; const it = a.i && itemById[a.i], pins = state.pins.filter(p => p.asset === a.c);
   const row = (k, v) => v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : '';
@@ -235,7 +253,7 @@ function renderGallery() {
   const slice = arr.slice(0, Math.max(shown, 150));
   $('galGrid').innerHTML = slice.map(p => {
     const its = photoItems(p.id), it = its[0];
-    return `<div class="gcard" data-photo="${p.id}"><img loading="lazy" src="${aUrl('photos', p.file)}" alt=""><div><div class="n">${esc(it ? it.name : (p.name || p.sheet || 'ไม่ระบุชื่อ'))}</div><div class="muted">${it ? floorLbl(it.floor) : 'ยังไม่ผูกรายการ'}${p.brand ? ' · ' + esc(p.brand) : ''}</div></div>
+    return `<div class="gcard" data-photo="${p.id}"><img class="pic" loading="lazy" decoding="async" src="${aUrl('photos', p.file)}" alt=""><div><div class="n">${esc(it ? it.name : (p.name || p.sheet || 'ไม่ระบุชื่อ'))}</div><div class="muted">${it ? floorLbl(it.floor) : 'ยังไม่ผูกรายการ'}${p.brand ? ' · ' + esc(p.brand) : ''}</div></div>
       ${curItem && !its.includes(curItem) ? `<button class="ghost" style="width:100%;border-radius:0" data-link="${p.id}">+ ผูกกับรายการที่เลือก</button>` : ''}</div>`;
   }).join('') + (arr.length > slice.length ? `<div class="more" style="grid-column:1/-1"><button class="ghost" id="galMore">แสดงเพิ่ม</button></div>` : '') || '<p class="muted" style="padding:20px">ไม่พบรูปในเงื่อนไขนี้</p>';
 }
@@ -305,7 +323,7 @@ function renderDetail() {
     ${pins.map(p => { const pl = planById[p.plan]; return `<div class="row" style="padding:6px 0" data-gopin="${p.id}"><div class="t" style="font-weight:400">${p.asset ? '<b>' + esc(p.asset) + '</b> · ' : ''}${esc(pl ? pl.title : p.plan)} <span class="muted">· หน้า ${p.page}</span></div>
       <div class="s"><button class="ghost" data-delpin="${p.id}">ลบหมุด</button></div></div>`; }).join('') || '<p class="muted">ยังไม่ได้ปักหมุด</p>'}
     <h3 style="font-size:14px;margin:16px 0 4px">รูปภาพ (${photos.length})</h3>
-    <div class="gallery">${photos.map(p => `<div><img src="${aUrl('photos', p.file)}" data-lb="${p.id}" alt="${esc(p.name)}">${(state.photoLinks[it.id] || []).includes(p.id) ? `<button class="ghost" style="width:100%" data-unlink="${p.id}">เลิกผูก</button>` : ''}</div>`).join('') || '<p class="muted">ไม่พบรูปที่ตรงกัน — ไปแท็บ “รูปภาพ” เพื่อผูกรูปเอง</p>'}</div>`;
+    <div class="gallery">${photos.map(p => `<div><img class="pic" loading="lazy" src="${aUrl('photos', p.file)}" data-lb="${p.id}" alt="${esc(p.name)}">${(state.photoLinks[it.id] || []).includes(p.id) ? `<button class="ghost" style="width:100%" data-unlink="${p.id}">เลิกผูก</button>` : ''}</div>`).join('') || '<p class="muted">ไม่พบรูปที่ตรงกัน — ไปแท็บ “รูปภาพ” เพื่อผูกรูปเอง</p>'}</div>`;
 }
 /* ---- manual re-matching of registry numbers (stored in state.matchOverrides, applied on boot) ---- */
 function applyOverride(code, itemId) {
@@ -595,4 +613,32 @@ $('btnTheme').onclick = () => { const dark = $('btnTheme').textContent === '☀'
   const counts = {}; CAT.items.forEach(i => counts[i.cat] = (counts[i.cat] || 0) + 1);
   $('catSel').innerHTML = '<option value="">ทุกหมวดงาน</option>' + CAT.categories.map(c => `<option value="${c.id}">${c.id} · ${esc(c.name)}${counts[c.id] ? ' (' + counts[c.id] + ')' : ''}</option>`).join('');
   refreshFloors(); renderList();
+})();
+
+/* ---------------- resizable / collapsible side panels ---------------- */
+(function panels() {
+  const root = document.documentElement, KEY = 'eqmap-panels', def = { lw: 330, rw: 320 };
+  let cfg = Object.assign({}, def, { noleft: false, noright: false });
+  try { Object.assign(cfg, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch { }
+  const apply = () => {
+    root.style.setProperty('--lw', cfg.lw + 'px'); root.style.setProperty('--rw', cfg.rw + 'px');
+    document.body.classList.toggle('noleft', cfg.noleft); document.body.classList.toggle('noright', cfg.noright);
+    $('btnColL').classList.toggle('on', !cfg.noleft); $('btnColR').classList.toggle('on', !cfg.noright);
+  };
+  const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch { } };
+  const refit = () => { clearTimeout(refit.t); refit.t = setTimeout(() => pdfDoc && renderPage(true), 200); };
+  apply();
+  const drag = (el, side) => {
+    el.addEventListener('mousedown', e => {
+      e.preventDefault(); el.classList.add('drag'); document.body.classList.add('resizing');
+      const sx = e.clientX, start = cfg[side === 'l' ? 'lw' : 'rw'];
+      const mv = ev => { const d = ev.clientX - sx; cfg[side === 'l' ? 'lw' : 'rw'] = Math.round(Math.min(640, Math.max(220, start + (side === 'l' ? d : -d)))); if (side === 'l') cfg.noleft = false; else cfg.noright = false; apply(); };
+      const up = () => { removeEventListener('mousemove', mv); removeEventListener('mouseup', up); el.classList.remove('drag'); document.body.classList.remove('resizing'); persist(); refit(); };
+      addEventListener('mousemove', mv); addEventListener('mouseup', up);
+    });
+    el.addEventListener('dblclick', () => { cfg[side === 'l' ? 'lw' : 'rw'] = def[side === 'l' ? 'lw' : 'rw']; apply(); persist(); refit(); });
+  };
+  drag($('rzL'), 'l'); drag($('rzR'), 'r');
+  $('btnColL').onclick = () => { cfg.noleft = !cfg.noleft; apply(); persist(); refit(); };
+  $('btnColR').onclick = () => { cfg.noright = !cfg.noright; apply(); persist(); refit(); };
 })();

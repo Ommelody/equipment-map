@@ -38,7 +38,7 @@ select,input[type=search],input[type=text]{font:inherit;width:100%;padding:6px 8
 .chk,.switch{display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:13px;cursor:pointer;user-select:none}
 .switch span{font-weight:500;color:var(--ink)}
 .sync{font-size:12px;color:var(--muted)}.sync.ok{color:var(--ok)}.sync.err{color:var(--accent)}
-main{flex:1;display:grid;grid-template-columns:330px 1fr 320px;min-height:0}
+main{flex:1;display:grid;grid-template-columns:var(--lw,330px) minmax(0,1fr) var(--rw,320px);min-height:0}
 aside{background:var(--panel);display:flex;flex-direction:column;min-height:0}
 #left{border-right:1px solid var(--line)}#right{border-left:1px solid var(--line);overflow:auto}
 .tabs{display:flex;border-bottom:1px solid var(--line)}
@@ -111,3 +111,19 @@ aside{background:var(--panel);display:flex;flex-direction:column;min-height:0}
   #left{top:0;z-index:40}#syncState{display:none}
   main{min-width:0}body{overflow-x:hidden}
 }
+/* resizable / collapsible side panels */
+#left,#right{position:relative}
+.rz{position:absolute;top:0;bottom:0;right:-3px;width:7px;cursor:col-resize;z-index:6}.rz.rzr{right:auto;left:-3px}
+.rz:hover,.rz.drag{background:color-mix(in srgb,var(--brand) 45%,transparent)}
+body.noleft #left,body.noright #right{width:0;min-width:0;overflow:hidden;border:0}
+body.noleft{--lw:0px}body.noright{--rw:0px}
+body.resizing{user-select:none;cursor:col-resize}
+/* one picture style for the whole system: full image visible (no crop, no shrink), same box everywhere */
+.pic{display:block;width:100%;aspect-ratio:4/3;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:6px;cursor:pointer}
+.photos .ph img.pic,.gcard img.pic,.gallery img.pic{height:auto;max-height:none;border:0;border-radius:0}
+.gcard{display:flex;flex-direction:column}
+#galGrid{grid-auto-rows:max-content}
+.gcard>div{flex:0 0 auto}
+@media (max-width:1000px){.rz,.desk{display:none}}
+#regPager{display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;padding:7px 10px;background:var(--panel);border-top:1px solid var(--line)}
+#regPager button{padding:4px 10px}#regPager button[disabled]{opacity:.4;cursor:default}#regPager select,#regPager input{width:auto}#regPager input{width:64px;text-align:center}

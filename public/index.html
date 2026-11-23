@@ -12,6 +12,7 @@
 <body>
 <header>
   <h1>แผนผังตำแหน่งครุภัณฑ์ <small>ศูนย์การแพทย์ธรรมศาสตร์</small></h1>
+  <button id="btnColL" class="ghost desk" title="ซ่อน/แสดงแผงซ้าย">◧</button><button id="btnColR" class="ghost desk" title="ซ่อน/แสดงแผงขวา">◨</button>
   <button id="btnLeft" class="ghost mob">☰ รายการ</button><button id="btnRight" class="ghost mob">ℹ︎ รายละเอียด</button>
   <div class="spacer"></div>
   <button id="btnTheme" class="ghost" title="สลับโหมดมืด/สว่าง">☾</button>
@@ -23,7 +24,7 @@
 </header>
 
 <main>
-  <aside id="left">
+  <aside id="left"><div class="rz" id="rzL" title="ลากเพื่อปรับความกว้าง (ดับเบิลคลิก = ค่าเริ่มต้น)"></div>
     <div class="tabs"><button data-tab="plans" class="on">แปลน</button><button data-tab="items">ครุภัณฑ์</button><button data-tab="photos">รูปภาพ</button><button data-tab="registry">ทะเบียน</button><button data-tab="progress">ความคืบหน้า</button></div>
     <div class="filters">
       <select id="catSel"></select>
@@ -62,9 +63,10 @@
       <select id="regMatch"><option value="">จับคู่: ทั้งหมด</option><option value="m">จับคู่กับเอกสารแล้ว</option><option value="u">ยังไม่จับคู่</option><option value="p">ปักหมุดแล้ว</option><option value="np">ยังไม่ปักหมุด</option></select>
     </div>
     <div id="regWrap"><table id="regTable"></table></div>
+    <div id="regPager"></div>
   </section>
 
-  <aside id="right">
+  <aside id="right"><div class="rz rzr" id="rzR" title="ลากเพื่อปรับความกว้าง (ดับเบิลคลิก = ค่าเริ่มต้น)"></div>
     <div id="detail"><p class="muted">คลิกหมุดบนแปลน หรือเลือกรายการครุภัณฑ์ เพื่อดูรายละเอียดและรูปภาพ</p></div>
   </aside>
 </main>
