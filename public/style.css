@@ -86,7 +86,7 @@ aside{background:var(--panel);display:flex;flex-direction:column;min-height:0}
 .prow{display:grid;gap:3px;font-size:12.5px;cursor:pointer}.prow:hover .nm{color:var(--brand)}.prow .nm{display:flex;justify-content:space-between;gap:8px}
 .big{font-size:26px;font-weight:700}
 .mob{display:none}
-.dlg{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:55}.dlg>div{background:var(--panel);border-radius:10px;padding:14px;width:min(480px,92vw);max-height:80vh;display:flex;flex-direction:column;gap:8px}.dlg .res{overflow:auto}
+.dlg{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:55}.dlg[hidden]{display:none}.dlg>div{background:var(--panel);border-radius:10px;padding:14px;width:min(480px,92vw);max-height:80vh;display:flex;flex-direction:column;gap:8px}.dlg .res{overflow:auto}
 @media (max-width:1000px){
   .mob{display:inline-block}
   main{grid-template-columns:1fr;position:relative}
