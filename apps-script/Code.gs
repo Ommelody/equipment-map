@@ -8,7 +8,7 @@
  * GET  ?action=chunk&id=&n=&size=-> { total, data(base64) }   (plan PDFs streamed in chunks; works for private files)
  * POST (text/plain JSON body)   -> saves the whole state; optional token check (Script property EDIT_TOKEN)
  */
-var ROOT_FOLDER_ID = 'PUT_DRIVE_FOLDER_ID_HERE';   // Drive folder that contains sub-folders "plans" and "photos"
+var ROOT_FOLDER_ID = '1F61aO5Zv4Gbzb7BXRmV-EJsaaooowJO9';   // Drive folder that contains sub-folders "plans" and "photos"
 var PIN_HEAD = ['id', 'plan', 'page', 'x', 'y', 'item', 'asset', 'label', 'updated'];
 
 function sheet_(name, head) {
